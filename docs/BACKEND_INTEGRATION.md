@@ -107,7 +107,7 @@ Body (JSON):
 ```json
 {
   "server_id": "<string>",
-  "agent_version": "0.4.12",
+  "agent_version": "0.4.13",
   "go_version": "go1.xx.x",
   "hostname": "<string>",
   "pid": 1234,
@@ -606,7 +606,7 @@ Cause:
 
 Fix:
 
-- Upgrade to agent **v0.4.12+** and confirm heartbeat `capabilities.handlers` includes `command.run`.
+- Upgrade to agent **v0.4.13+** and confirm heartbeat `capabilities.handlers` includes `command.run`.
 - If using `{cmd, shell:true}`, also ensure `operations.allow_shell: true` on the host.
 
 ## Quick verification (server-side)
