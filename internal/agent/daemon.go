@@ -39,6 +39,10 @@ type Daemon struct {
 	mu                   sync.RWMutex
 	remoteConf           model.RemoteConfig
 	detectedCapabilities map[string]bool
+
+	auditMu       sync.Mutex
+	auditInFlight map[string]struct{}
+	auditRecent   map[string]time.Time
 }
 
 func NewDaemon(logger *slog.Logger, cfg cfgpkg.Config) (*Daemon, error) {
@@ -69,6 +73,8 @@ func NewDaemon(logger *slog.Logger, cfg cfgpkg.Config) (*Daemon, error) {
 		store:                st,
 		remEng:               remediation.NewEngine(logger, exec),
 		detectedCapabilities: detectCapabilities(),
+		auditInFlight:        map[string]struct{}{},
+		auditRecent:          map[string]time.Time{},
 	}
 
 	// Load cached remote config.
@@ -269,8 +275,13 @@ func (d *Daemon) configPollLoop(ctx context.Context) {
 			if rc.PendingAuditJob != nil {
 				if err := validatePendingAuditJob(rc.PendingAuditJob); err != nil {
 					d.logger.Warn("invalid pending_audit_job", "err", err)
+				} else if d.beginAuditJob(rc.PendingAuditJob.RunID) {
+					go func(job *model.PendingAuditJob) {
+						handled := d.handlePendingAuditJob(ctx, job)
+						d.endAuditJob(job.RunID, handled)
+					}(rc.PendingAuditJob)
 				} else {
-					go d.handlePendingAuditJob(ctx, rc.PendingAuditJob)
+					d.logger.Info("pending_audit_job already handled locally", "run_id", rc.PendingAuditJob.RunID)
 				}
 				goto wait
 			}
@@ -312,6 +323,41 @@ func (d *Daemon) configPollLoop(ctx context.Context) {
 			return
 		case <-ticker.C:
 		}
+	}
+}
+
+func (d *Daemon) beginAuditJob(runID string) bool {
+	if runID == "" {
+		return false
+	}
+	d.auditMu.Lock()
+	defer d.auditMu.Unlock()
+
+	now := time.Now()
+	for id, handledAt := range d.auditRecent {
+		if now.Sub(handledAt) > 30*time.Minute {
+			delete(d.auditRecent, id)
+		}
+	}
+	if _, ok := d.auditInFlight[runID]; ok {
+		return false
+	}
+	if _, ok := d.auditRecent[runID]; ok {
+		return false
+	}
+	d.auditInFlight[runID] = struct{}{}
+	return true
+}
+
+func (d *Daemon) endAuditJob(runID string, handled bool) {
+	if runID == "" {
+		return
+	}
+	d.auditMu.Lock()
+	defer d.auditMu.Unlock()
+	delete(d.auditInFlight, runID)
+	if handled {
+		d.auditRecent[runID] = time.Now()
 	}
 }
 

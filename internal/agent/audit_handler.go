@@ -15,9 +15,9 @@ func auditResultKey(runID string) string {
 	return "result_" + runID
 }
 
-func (d *Daemon) handlePendingAuditJob(ctx context.Context, job *model.PendingAuditJob) {
+func (d *Daemon) handlePendingAuditJob(ctx context.Context, job *model.PendingAuditJob) bool {
 	if job == nil {
-		return
+		return false
 	}
 
 	if b, ok, err := d.store.Get(ctx, bucketAudit, auditResultKey(job.RunID)); err == nil && ok {
@@ -26,10 +26,10 @@ func (d *Daemon) handlePendingAuditJob(ctx context.Context, job *model.PendingAu
 			d.logger.Info("pending_audit_job: retry posting cached result", "run_id", job.RunID)
 			if err := d.api.PostAuditResult(ctx, cached); err != nil {
 				d.logger.Warn("pending_audit_job: post cached result failed", "run_id", job.RunID, "err", err)
-				return
+				return false
 			}
 			_ = d.store.Delete(ctx, bucketAudit, auditResultKey(job.RunID))
-			return
+			return true
 		}
 	}
 
@@ -44,8 +44,9 @@ func (d *Daemon) handlePendingAuditJob(ctx context.Context, job *model.PendingAu
 		d.logger.Warn("pending_audit_job: post result failed, caching", "run_id", job.RunID, "err", err)
 		b, _ := json.Marshal(result)
 		_ = d.store.Put(context.Background(), bucketAudit, auditResultKey(job.RunID), b)
-		return
+		return false
 	}
 
 	d.logger.Info("pending_audit_job finished", "run_id", job.RunID, "checks", len(result.Results))
+	return true
 }
