@@ -240,7 +240,7 @@ func normalizeCheck(checkKey string, outputs []commandOutput) (string, float64, 
 		}
 		return "unknown", 0.4, summary("The security hygiene check could not be completed.")
 	case "askio_agent_offline":
-		if strings.Contains(combined, "active") {
+		if firstOutputLineEquals(outputs, "active") {
 			return "pass", 0.95, summary("Askio monitor service is active.")
 		}
 		return "fail", 0.8, summary("Askio monitor service is not active.")
@@ -350,6 +350,18 @@ func anyExitCode(outputs []commandOutput, code int) bool {
 	return false
 }
 
+func firstOutputLineEquals(outputs []commandOutput, expected string) bool {
+	expected = strings.ToLower(strings.TrimSpace(expected))
+	for _, output := range outputs {
+		for _, line := range strings.Split(output.Output, "\n") {
+			if strings.ToLower(strings.TrimSpace(line)) == expected {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 func summary(text string) map[string]any {
 	return map[string]any{"summary": text}
 }
@@ -375,9 +387,11 @@ func portStatus(output string, ports []string, failSummary string, passSummary s
 		if !(strings.Contains(lower, "listen") || strings.Contains(lower, "udp")) {
 			continue
 		}
-		for _, port := range ports {
-			if strings.Contains(lower, port) && (strings.Contains(lower, "0.0.0.0") || strings.Contains(lower, "[::]") || strings.Contains(lower, "*:")) {
-				public = true
+		for _, field := range strings.Fields(lower) {
+			for _, port := range ports {
+				if strings.Contains(field, strings.TrimSpace(port)) && isPublicListenAddress(field) {
+					public = true
+				}
 			}
 		}
 	}
@@ -385,6 +399,14 @@ func portStatus(output string, ports []string, failSummary string, passSummary s
 		return "fail", 0.9, summary(failSummary)
 	}
 	return "pass", 0.75, summary(passSummary)
+}
+
+func isPublicListenAddress(address string) bool {
+	address = strings.TrimSpace(strings.ToLower(address))
+	return strings.HasPrefix(address, "0.0.0.0:") ||
+		strings.HasPrefix(address, "[::]:") ||
+		strings.HasPrefix(address, ":::") ||
+		strings.HasPrefix(address, "*:")
 }
 
 func maxDiskPercent(output string) int {
