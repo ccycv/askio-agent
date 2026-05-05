@@ -31,13 +31,13 @@ const (
 
 type MonitorConfig struct {
 	ID                   string            `json:"id"`
-	ServiceName           string            `json:"service_name"`
-	ServiceType           ServiceType       `json:"service_type"`
-	SystemdUnit           string            `json:"systemd_unit,omitempty"`
-	DockerContainerID     string            `json:"docker_container_id,omitempty"`
-	ProcessMatch          string            `json:"process_match,omitempty"`
-	CheckTypes            []CheckType        `json:"check_types"`
-	CheckIntervalSeconds  int               `json:"check_interval_seconds"`
+	ServiceName          string            `json:"service_name"`
+	ServiceType          ServiceType       `json:"service_type"`
+	SystemdUnit          string            `json:"systemd_unit,omitempty"`
+	DockerContainerID    string            `json:"docker_container_id,omitempty"`
+	ProcessMatch         string            `json:"process_match,omitempty"`
+	CheckTypes           []CheckType       `json:"check_types"`
+	CheckIntervalSeconds int               `json:"check_interval_seconds"`
 	Port                 int               `json:"port,omitempty"`
 	HTTPEndpoint         string            `json:"http_endpoint,omitempty"`
 	Enabled              bool              `json:"enabled"`
@@ -67,8 +67,9 @@ type RemoteConfig struct {
 	CommandID string `json:"command_id,omitempty"`
 
 	// Operations Platform
-	PendingAction *PendingAction `json:"pending_action,omitempty"`
-	Capabilities  map[string]any `json:"capabilities,omitempty"`
+	PendingAction   *PendingAction   `json:"pending_action,omitempty"`
+	PendingAuditJob *PendingAuditJob `json:"pending_audit_job,omitempty"`
+	Capabilities    map[string]any   `json:"capabilities,omitempty"`
 }
 
 type DiscoveredService struct {
@@ -109,34 +110,34 @@ type RemediationStepResult struct {
 }
 
 type RemediationRunLog struct {
-	ServerID      string                  `json:"server_id"`
-	MonitorID     string                  `json:"monitor_id"`
-	IncidentID    string                  `json:"incident_id,omitempty"`
-	PlaybookID    string                  `json:"playbook_id"`
-	Trigger       string                  `json:"trigger"`
-	Success       bool                    `json:"success"`
-	Steps         []RemediationStepResult `json:"steps"`
-	Verification  map[string]any          `json:"verification,omitempty"`
-	StartedAt     time.Time               `json:"started_at"`
-	FinishedAt    time.Time               `json:"finished_at"`
+	ServerID     string                  `json:"server_id"`
+	MonitorID    string                  `json:"monitor_id"`
+	IncidentID   string                  `json:"incident_id,omitempty"`
+	PlaybookID   string                  `json:"playbook_id"`
+	Trigger      string                  `json:"trigger"`
+	Success      bool                    `json:"success"`
+	Steps        []RemediationStepResult `json:"steps"`
+	Verification map[string]any          `json:"verification,omitempty"`
+	StartedAt    time.Time               `json:"started_at"`
+	FinishedAt   time.Time               `json:"finished_at"`
 }
 
 // ---- Operations Platform (v1) ----
 
 type PendingAction struct {
-	RunID          string                 `json:"run_id"`
-	ActionID       string                 `json:"action_id"`
-	ActionName     string                 `json:"action_name"`
-	ActionType     string                 `json:"action_type"`     // script|plan|playbook|ansible
-	TimeoutSeconds int                    `json:"timeout_seconds"` // default 300
-	ExecutionMode  string                 `json:"execution_mode"`  // live|dry_run
-	Parameters     map[string]any         `json:"parameters,omitempty"`
-	EnableRollback bool                   `json:"enable_rollback"`
-	ScriptContent  string                 `json:"script_content,omitempty"`
-	RollbackScript string                 `json:"rollback_script,omitempty"`
-	ActionPlan     *ActionPlan            `json:"action_plan,omitempty"`
-	Playbook       *OperationsPlaybook    `json:"playbook,omitempty"`
-	AnsiblePlaybook *AnsiblePlaybook      `json:"ansible_playbook,omitempty"`
+	RunID           string              `json:"run_id"`
+	ActionID        string              `json:"action_id"`
+	ActionName      string              `json:"action_name"`
+	ActionType      string              `json:"action_type"`     // script|plan|playbook|ansible
+	TimeoutSeconds  int                 `json:"timeout_seconds"` // default 300
+	ExecutionMode   string              `json:"execution_mode"`  // live|dry_run
+	Parameters      map[string]any      `json:"parameters,omitempty"`
+	EnableRollback  bool                `json:"enable_rollback"`
+	ScriptContent   string              `json:"script_content,omitempty"`
+	RollbackScript  string              `json:"rollback_script,omitempty"`
+	ActionPlan      *ActionPlan         `json:"action_plan,omitempty"`
+	Playbook        *OperationsPlaybook `json:"playbook,omitempty"`
+	AnsiblePlaybook *AnsiblePlaybook    `json:"ansible_playbook,omitempty"`
 }
 
 // AnsiblePlaybook is a simple locally executed playbook payload.
@@ -161,19 +162,19 @@ type PlanStep struct {
 }
 
 type OperationsPlaybookStep struct {
-	ID            string `json:"id,omitempty"`
-	Command       string `json:"command"`
-	Description   string `json:"description,omitempty"`
-	TimeoutSeconds int   `json:"timeout_seconds,omitempty"`
-	FailAction    string `json:"fail_action,omitempty"` // abort|continue
+	ID             string `json:"id,omitempty"`
+	Command        string `json:"command"`
+	Description    string `json:"description,omitempty"`
+	TimeoutSeconds int    `json:"timeout_seconds,omitempty"`
+	FailAction     string `json:"fail_action,omitempty"` // abort|continue
 }
 
 type OperationsPlaybook struct {
-	ID                 string                 `json:"id"`
-	Name               string                 `json:"name"`
-	Steps              []OperationsPlaybookStep `json:"steps"`
-	VerificationCommand string                `json:"verification_command,omitempty"`
-	RollbackSteps      []OperationsPlaybookStep `json:"rollback_steps,omitempty"`
+	ID                  string                   `json:"id"`
+	Name                string                   `json:"name"`
+	Steps               []OperationsPlaybookStep `json:"steps"`
+	VerificationCommand string                   `json:"verification_command,omitempty"`
+	RollbackSteps       []OperationsPlaybookStep `json:"rollback_steps,omitempty"`
 }
 
 type OperationsAgentResult struct {
@@ -207,8 +208,8 @@ type PendingCommand struct {
 	ExecutionMode  string `json:"execution_mode,omitempty"` // live|dry_run
 
 	// generate_host_token
-	ServerID          string `json:"server_id,omitempty"`
-	ExpiresInSeconds  int    `json:"expires_in_seconds,omitempty"`
+	ServerID         string `json:"server_id,omitempty"`
+	ExpiresInSeconds int    `json:"expires_in_seconds,omitempty"`
 
 	// install_capability
 	Capability string `json:"capability,omitempty"`
@@ -263,8 +264,85 @@ type CommandResult struct {
 }
 
 type GatewayHostTokenResult struct {
-	CommandID  string    `json:"command_id"`
-	ServerID   string    `json:"server_id"`
-	Token      string    `json:"token"`
-	ExpiresAt  time.Time `json:"expires_at"`
+	CommandID string    `json:"command_id"`
+	ServerID  string    `json:"server_id"`
+	Token     string    `json:"token"`
+	ExpiresAt time.Time `json:"expires_at"`
+}
+
+// ---- NIS2 Audit Platform ----
+
+type PendingAuditJob struct {
+	RunID          string                 `json:"run_id"`
+	Framework      string                 `json:"framework"`
+	CountryCode    string                 `json:"country_code"`
+	BundleVersion  string                 `json:"bundle_version"`
+	Target         AuditTarget            `json:"target"`
+	TimeoutSeconds int                    `json:"timeout_seconds"`
+	RedactionRules AuditRedactionRules    `json:"redaction_rules"`
+	Checks         []AuditCheckDefinition `json:"checks"`
+}
+
+type AuditTarget struct {
+	AgentID      string         `json:"agent_id,omitempty"`
+	ServerID     string         `json:"server_id,omitempty"`
+	Hostname     string         `json:"hostname,omitempty"`
+	Capabilities map[string]any `json:"capabilities,omitempty"`
+}
+
+type AuditRedactionRules struct {
+	RedactPatterns []string `json:"redact_patterns"`
+	StoreRawOutput bool     `json:"store_raw_output"`
+}
+
+type AuditCheckDefinition struct {
+	ID                   string         `json:"id"`
+	CheckKey             string         `json:"check_key"`
+	Name                 string         `json:"name"`
+	Description          string         `json:"description"`
+	Severity             string         `json:"severity"`
+	RemediationAvailable bool           `json:"remediation_available"`
+	ReadOnly             bool           `json:"read_only"`
+	Logic                map[string]any `json:"logic,omitempty"`
+	Control              AuditControl   `json:"control"`
+}
+
+type AuditControl struct {
+	ID     string `json:"id"`
+	Code   string `json:"code"`
+	Title  string `json:"title"`
+	Family string `json:"family"`
+}
+
+type AuditAgentResult struct {
+	RunID      string             `json:"run_id"`
+	ServerID   string             `json:"server_id,omitempty"`
+	AgentID    string             `json:"agent_id,omitempty"`
+	StartedAt  time.Time          `json:"started_at"`
+	FinishedAt time.Time          `json:"finished_at"`
+	Results    []AuditCheckResult `json:"results"`
+}
+
+type AuditCheckResult struct {
+	CheckKey          string              `json:"check_key"`
+	CheckDefinitionID string              `json:"check_definition_id,omitempty"`
+	Status            string              `json:"status"`
+	Severity          string              `json:"severity"`
+	Confidence        float64             `json:"confidence"`
+	RawOutput         any                 `json:"raw_output,omitempty"`
+	RawResultJSON     map[string]any      `json:"raw_result_json,omitempty"`
+	Normalized        map[string]any      `json:"normalized,omitempty"`
+	EvidenceItems     []AuditEvidenceItem `json:"evidence_items,omitempty"`
+	StartedAt         time.Time           `json:"started_at"`
+	FinishedAt        time.Time           `json:"finished_at"`
+	Errors            []string            `json:"errors,omitempty"`
+}
+
+type AuditEvidenceItem struct {
+	Title             string         `json:"title"`
+	EvidenceType      string         `json:"evidence_type"`
+	RawOutput         any            `json:"raw_output,omitempty"`
+	NormalizedSummary map[string]any `json:"normalized_summary,omitempty"`
+	RedactionStatus   string         `json:"redaction_status,omitempty"`
+	MetadataJSON      map[string]any `json:"metadata_json,omitempty"`
 }

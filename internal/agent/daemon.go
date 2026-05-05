@@ -37,16 +37,16 @@ type Daemon struct {
 	remEng *remediation.Engine
 
 	mu                   sync.RWMutex
-	remoteConf            model.RemoteConfig
-	detectedCapabilities  map[string]bool
+	remoteConf           model.RemoteConfig
+	detectedCapabilities map[string]bool
 }
 
 func NewDaemon(logger *slog.Logger, cfg cfgpkg.Config) (*Daemon, error) {
 	apiClient, err := api.New(api.Options{
-		BaseURL:        cfg.APIURL,
-		Token:          cfg.AgentToken,
-		TLSSkipVerify:  cfg.TLSSkipVerify,
-		CACertPath:     cfg.CACertPath,
+		BaseURL:       cfg.APIURL,
+		Token:         cfg.AgentToken,
+		TLSSkipVerify: cfg.TLSSkipVerify,
+		CACertPath:    cfg.CACertPath,
 	})
 	if err != nil {
 		return nil, err
@@ -147,32 +147,54 @@ func (d *Daemon) postHeartbeat(ctx context.Context) error {
 	caps := d.snapshotDetectedCapabilities()
 
 	payload := map[string]any{
-		"server_id":             d.cfg.ServerID,
-		"agent_version":         version.Version,
-		"go_version":            runtime.Version(),
-		"hostname":              hostnameSafe(),
-		"pid":                   os.Getpid(),
-		"timestamp":             time.Now().UTC(),
-		"privilege_mode":        string(d.cfg.PrivilegeMode),
-		"cpu_percent":           cpuPercent,
-		"memory_percent":        memPercent,
-		"memory":               memBreakdown,
-		"has_multiple_disks":    hasMultiDisks,
+		"server_id":              d.cfg.ServerID,
+		"agent_version":          version.Version,
+		"go_version":             runtime.Version(),
+		"hostname":               hostnameSafe(),
+		"pid":                    os.Getpid(),
+		"timestamp":              time.Now().UTC(),
+		"privilege_mode":         string(d.cfg.PrivilegeMode),
+		"cpu_percent":            cpuPercent,
+		"memory_percent":         memPercent,
+		"memory":                 memBreakdown,
+		"has_multiple_disks":     hasMultiDisks,
 		"disk_used_percent_root": rootDiskPct,
-		"disks":                 disks,
-		"network_interfaces":    nics,
-		"network_counters":      netCounters,
-		"disk_latency":          func() any { if sampled != nil { return sampled.Disk } ; return nil }(),
-		"disk_latency_avg":      func() any { if sampled != nil { return sampled.DiskAvg } ; return nil }(),
-		"top_processes_cpu":     func() any { if sampled != nil { return sampled.TopCPU } ; return nil }(),
-		"top_processes_mem":     func() any { if sampled != nil { return sampled.TopMem } ; return nil }(),
+		"disks":                  disks,
+		"network_interfaces":     nics,
+		"network_counters":       netCounters,
+		"disk_latency": func() any {
+			if sampled != nil {
+				return sampled.Disk
+			}
+			return nil
+		}(),
+		"disk_latency_avg": func() any {
+			if sampled != nil {
+				return sampled.DiskAvg
+			}
+			return nil
+		}(),
+		"top_processes_cpu": func() any {
+			if sampled != nil {
+				return sampled.TopCPU
+			}
+			return nil
+		}(),
+		"top_processes_mem": func() any {
+			if sampled != nil {
+				return sampled.TopMem
+			}
+			return nil
+		}(),
 		"os_info":               detectOS(),
 		"detected_capabilities": caps,
 		"capabilities": map[string]any{
-			"monitoring":  true,
-			"operations":  true,
-			"handlers":    operations.DefaultRegistry(d.remEngExec(), d.cfg.Operations).IDs(),
-			"playbooks":   d.remEng.IDs(),
+			"audit":          true,
+			"audit_config":   map[string]any{"mode": "read_only", "frameworks": []string{"nis2"}, "bundle_version": "2026.05"},
+			"monitoring":     true,
+			"operations":     true,
+			"handlers":       operations.DefaultRegistry(d.remEngExec(), d.cfg.Operations).IDs(),
+			"playbooks":      d.remEng.IDs(),
 			"privilege_mode": string(d.cfg.PrivilegeMode),
 			"operations_config": map[string]any{
 				"command_run":       true,
@@ -244,6 +266,15 @@ func (d *Daemon) configPollLoop(ctx context.Context) {
 				goto wait
 			}
 
+			if rc.PendingAuditJob != nil {
+				if err := validatePendingAuditJob(rc.PendingAuditJob); err != nil {
+					d.logger.Warn("invalid pending_audit_job", "err", err)
+				} else {
+					go d.handlePendingAuditJob(ctx, rc.PendingAuditJob)
+				}
+				goto wait
+			}
+
 			// UI-driven command support.
 			if rc.PendingCommand.V2 != nil {
 				d.logger.Info("received pending_command_v2",
@@ -282,6 +313,30 @@ func (d *Daemon) configPollLoop(ctx context.Context) {
 		case <-ticker.C:
 		}
 	}
+}
+
+func validatePendingAuditJob(job *model.PendingAuditJob) error {
+	if job == nil {
+		return nil
+	}
+	if job.RunID == "" {
+		return fmt.Errorf("pending_audit_job.run_id is required")
+	}
+	if job.BundleVersion == "" {
+		return fmt.Errorf("pending_audit_job.bundle_version is required")
+	}
+	if len(job.Checks) == 0 {
+		return fmt.Errorf("pending_audit_job.checks is required")
+	}
+	for _, check := range job.Checks {
+		if check.CheckKey == "" {
+			return fmt.Errorf("pending_audit_job check_key is required")
+		}
+		if !check.ReadOnly {
+			return fmt.Errorf("pending_audit_job check %s is not read-only", check.CheckKey)
+		}
+	}
+	return nil
 }
 
 func (d *Daemon) discoveryLoop(ctx context.Context) {

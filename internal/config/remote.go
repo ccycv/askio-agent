@@ -73,6 +73,7 @@ func (m *RemoteConfigManager) PollOnce(ctx context.Context, serverID string) (mo
 	// If we cache it, a restart could re-trigger the same action.
 	toCache := resp
 	toCache.PendingAction = nil
+	toCache.PendingAuditJob = nil
 
 	if err := m.SaveCachedNoCommand(ctx, toCache); err != nil {
 		return model.RemoteConfig{}, fmt.Errorf("save cached remote config: %w", err)
