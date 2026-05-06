@@ -62,9 +62,21 @@ func (SystemdRunExecutor) Run(ctx context.Context, command string, args []string
 
 	// Some distros can have systemd-run installed but unable to create transient
 	// units from the agent service context. Keep read-only checks useful by
-	// falling back to the same non-interactive sudo execution used when
-	// systemd-run is unavailable.
-	return SudoExecutor{}.Run(ctx, command, args, timeoutSeconds)
+	// falling back to direct unprivileged execution first; many audit checks
+	// only need world-readable config or socket state. If that fails, try the
+	// direct non-interactive sudo path used when systemd-run is unavailable.
+	directResult, directErr := RootExecutor{}.Run(ctx, command, args, timeoutSeconds)
+	if directErr == nil {
+		return directResult, nil
+	}
+	sudoResult, sudoErr := SudoExecutor{}.Run(ctx, command, args, timeoutSeconds)
+	if sudoErr == nil {
+		return sudoResult, nil
+	}
+	if directResult.Output != "" {
+		return directResult, directErr
+	}
+	return sudoResult, sudoErr
 }
 
 func (SystemdRunExecutor) Format(command string, args []string) string {
