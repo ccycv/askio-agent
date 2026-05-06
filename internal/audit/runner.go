@@ -14,6 +14,8 @@ import (
 
 const maxRawOutputBytes = 200_000
 
+var auditNow = time.Now
+
 type commandRunner interface {
 	Run(ctx context.Context, command string, args []string, timeoutSeconds int) (remediation.ExecResult, error)
 	Format(command string, args []string) string
@@ -272,7 +274,9 @@ func normalizeCheck(checkKey string, outputs []commandOutput) (string, float64, 
 			return "fail", 0.9, map[string]any{"summary": "A filesystem is critically full.", "max_used_percent": critical}
 		}
 		return "pass", 0.8, map[string]any{"summary": "No critically full filesystem was detected.", "max_used_percent": critical}
-	case "backup_not_detected", "backup_older_than_threshold", "tls_certificate_expiring", "weak_tls_manual", "ssh_weak_ciphers_manual", "sudo_users", "inactive_users_manual", "unsupported_os_version", "unexpected_listening_ports":
+	case "unsupported_os_version":
+		return unsupportedOSStatus(outputs)
+	case "backup_not_detected", "backup_older_than_threshold", "tls_certificate_expiring", "weak_tls_manual", "ssh_weak_ciphers_manual", "sudo_users", "inactive_users_manual", "unexpected_listening_ports":
 		if commandOK {
 			return "warning", 0.7, summary("Evidence was collected for operator review.")
 		}
@@ -445,4 +449,230 @@ func maxDiskPercent(output string) int {
 		}
 	}
 	return maxPct
+}
+
+type osReleaseInfo struct {
+	ID         string
+	Name       string
+	PrettyName string
+	VersionID  string
+	Major      int
+	Minor      int
+	Stream     bool
+}
+
+func unsupportedOSStatus(outputs []commandOutput) (string, float64, map[string]any) {
+	output := outputByName(outputs, "os_release")
+	if strings.TrimSpace(output) == "" {
+		return "unknown", 0.4, summary("OS release metadata could not be collected.")
+	}
+	info, err := parseOSRelease(output)
+	if err != nil {
+		return "unknown", 0.4, summary("OS release metadata could not be parsed for lifecycle evaluation.")
+	}
+	return evaluateOSSupport(info, auditNow().UTC())
+}
+
+func outputByName(outputs []commandOutput, name string) string {
+	for _, output := range outputs {
+		if output.Name == name {
+			return output.Output
+		}
+	}
+	return ""
+}
+
+func parseOSRelease(output string) (osReleaseInfo, error) {
+	fields := map[string]string{}
+	for _, line := range strings.Split(output, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		key, value, ok := strings.Cut(line, "=")
+		if !ok {
+			continue
+		}
+		fields[strings.TrimSpace(key)] = strings.Trim(strings.TrimSpace(value), `"'`)
+	}
+	id := strings.ToLower(strings.TrimSpace(fields["ID"]))
+	versionID := strings.TrimSpace(fields["VERSION_ID"])
+	major, minor, err := parseMajorMinor(versionID)
+	if id == "" || versionID == "" || err != nil {
+		return osReleaseInfo{}, fmt.Errorf("invalid os-release fields")
+	}
+	name := strings.TrimSpace(fields["NAME"])
+	prettyName := strings.TrimSpace(fields["PRETTY_NAME"])
+	streamText := strings.ToLower(name + " " + prettyName + " " + fields["VERSION"])
+	return osReleaseInfo{
+		ID:         id,
+		Name:       firstNonEmpty(name, id),
+		PrettyName: prettyName,
+		VersionID:  versionID,
+		Major:      major,
+		Minor:      minor,
+		Stream:     strings.Contains(streamText, "stream"),
+	}, nil
+}
+
+func parseMajorMinor(version string) (int, int, error) {
+	version = strings.TrimSpace(version)
+	if version == "" {
+		return 0, 0, fmt.Errorf("empty version")
+	}
+	parts := strings.SplitN(version, ".", 3)
+	major, err := strconv.Atoi(parts[0])
+	if err != nil {
+		return 0, 0, err
+	}
+	minor := 0
+	if len(parts) > 1 {
+		if parsedMinor, parseErr := strconv.Atoi(parts[1]); parseErr == nil {
+			minor = parsedMinor
+		}
+	}
+	return major, minor, nil
+}
+
+func evaluateOSSupport(info osReleaseInfo, now time.Time) (string, float64, map[string]any) {
+	family := info.ID
+	if info.ID == "centos" && info.Stream {
+		family = "centos_stream"
+	}
+
+	type lifecycle struct {
+		Phase       string
+		StandardEnd string
+		ExtendedEnd string
+	}
+
+	policy := map[string]map[int]lifecycle{
+		"ubuntu": {
+			24: {Phase: "standard_support", StandardEnd: "2029-06-30"},
+			22: {Phase: "standard_support", StandardEnd: "2027-06-30"},
+			20: {Phase: "extended_support", StandardEnd: "2025-05-31", ExtendedEnd: "2030-05-31"},
+			18: {Phase: "extended_support", StandardEnd: "2023-05-31", ExtendedEnd: "2028-05-31"},
+		},
+		"debian": {
+			13: {Phase: "standard_support", StandardEnd: "2028-08-09", ExtendedEnd: "2030-06-30"},
+			12: {Phase: "standard_support", StandardEnd: "2026-06-10", ExtendedEnd: "2028-06-30"},
+			11: {Phase: "lts_support", StandardEnd: "2024-08-14", ExtendedEnd: "2026-08-31"},
+		},
+		"almalinux": {
+			10: {Phase: "maintenance_support", ExtendedEnd: "2035-05-31"},
+			9:  {Phase: "maintenance_support", ExtendedEnd: "2032-05-31"},
+			8:  {Phase: "maintenance_support", ExtendedEnd: "2029-05-31"},
+		},
+		"rocky": {
+			10: {Phase: "maintenance_support", ExtendedEnd: "2035-05-31"},
+			9:  {Phase: "maintenance_support", ExtendedEnd: "2032-05-31"},
+			8:  {Phase: "maintenance_support", ExtendedEnd: "2029-05-31"},
+		},
+		"rhel": {
+			10: {Phase: "maintenance_support", ExtendedEnd: "2035-05-31"},
+			9:  {Phase: "maintenance_support", ExtendedEnd: "2032-05-31"},
+			8:  {Phase: "maintenance_support", ExtendedEnd: "2029-05-31"},
+			7:  {Phase: "extended_support", StandardEnd: "2024-06-30", ExtendedEnd: "2029-05-31"},
+		},
+		"centos": {
+			8: {Phase: "eol", ExtendedEnd: "2021-12-31"},
+			7: {Phase: "eol", ExtendedEnd: "2024-06-30"},
+		},
+		"centos_stream": {
+			10: {Phase: "maintenance_support", ExtendedEnd: "2030-05-31"},
+			9:  {Phase: "maintenance_support", ExtendedEnd: "2027-05-31"},
+		},
+		"fedora": {
+			43: {Phase: "standard_support", StandardEnd: "2026-11-30"},
+			42: {Phase: "standard_support", StandardEnd: "2026-05-31"},
+			41: {Phase: "standard_support", StandardEnd: "2025-12-01"},
+			40: {Phase: "eol", StandardEnd: "2025-05-13"},
+		},
+	}
+
+	displayName := firstNonEmpty(info.PrettyName, info.Name, info.ID+" "+info.VersionID)
+	normalized := map[string]any{
+		"os_id":      info.ID,
+		"os_version": info.VersionID,
+		"os_name":    displayName,
+	}
+	if info.Stream {
+		normalized["os_stream"] = true
+	}
+
+	item, ok := policy[family][info.Major]
+	if !ok {
+		normalized["support_phase"] = "unmodeled"
+		normalized["summary"] = fmt.Sprintf("%s is not in the current lifecycle matrix; review support status manually.", displayName)
+		return "warning", 0.5, normalized
+	}
+
+	standardEnd := parseLifecycleDate(item.StandardEnd)
+	extendedEnd := parseLifecycleDate(item.ExtendedEnd)
+	normalized["support_phase"] = item.Phase
+	if !standardEnd.IsZero() {
+		normalized["standard_support_ends_on"] = standardEnd.Format("2006-01-02")
+	}
+	if !extendedEnd.IsZero() {
+		normalized["support_ends_on"] = extendedEnd.Format("2006-01-02")
+	}
+
+	switch item.Phase {
+	case "standard_support":
+		if !standardEnd.IsZero() && now.After(standardEnd) {
+			if !extendedEnd.IsZero() && !now.After(extendedEnd) {
+				normalized["support_phase"] = "extended_support"
+				normalized["summary"] = fmt.Sprintf("%s is out of standard support and should be upgraded or covered by extended vendor support.", displayName)
+				return "warning", 0.85, normalized
+			}
+			normalized["support_phase"] = "eol"
+			normalized["summary"] = fmt.Sprintf("%s is end-of-life and should be upgraded.", displayName)
+			return "fail", 0.95, normalized
+		}
+		normalized["summary"] = fmt.Sprintf("%s is within vendor-supported lifecycle.", displayName)
+		return "pass", 0.95, normalized
+	case "lts_support":
+		if !extendedEnd.IsZero() && now.After(extendedEnd) {
+			normalized["support_phase"] = "eol"
+			normalized["summary"] = fmt.Sprintf("%s is end-of-life and should be upgraded.", displayName)
+			return "fail", 0.95, normalized
+		}
+		normalized["summary"] = fmt.Sprintf("%s is within Debian LTS support.", displayName)
+		return "pass", 0.9, normalized
+	case "maintenance_support":
+		if !extendedEnd.IsZero() && now.After(extendedEnd) {
+			normalized["support_phase"] = "eol"
+			normalized["summary"] = fmt.Sprintf("%s is end-of-life and should be upgraded.", displayName)
+			return "fail", 0.95, normalized
+		}
+		normalized["summary"] = fmt.Sprintf("%s is within vendor-supported maintenance lifecycle.", displayName)
+		return "pass", 0.9, normalized
+	case "extended_support":
+		if !extendedEnd.IsZero() && now.After(extendedEnd) {
+			normalized["support_phase"] = "eol"
+			normalized["summary"] = fmt.Sprintf("%s is end-of-life and should be upgraded.", displayName)
+			return "fail", 0.95, normalized
+		}
+		normalized["summary"] = fmt.Sprintf("%s is outside standard support and should be upgraded or covered by extended vendor support.", displayName)
+		return "warning", 0.85, normalized
+	case "eol":
+		normalized["support_phase"] = "eol"
+		normalized["summary"] = fmt.Sprintf("%s is end-of-life and should be upgraded.", displayName)
+		return "fail", 0.95, normalized
+	default:
+		normalized["support_phase"] = "unmodeled"
+		normalized["summary"] = fmt.Sprintf("%s lifecycle status could not be classified automatically.", displayName)
+		return "warning", 0.5, normalized
+	}
+}
+
+func parseLifecycleDate(value string) time.Time {
+	if strings.TrimSpace(value) == "" {
+		return time.Time{}
+	}
+	parsed, err := time.Parse("2006-01-02", value)
+	if err != nil {
+		return time.Time{}
+	}
+	return parsed.UTC()
 }

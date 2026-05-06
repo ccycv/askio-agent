@@ -99,6 +99,10 @@ func TestRunnerNormalizesDiskAndLoginChecks(t *testing.T) {
 }
 
 func TestNormalizeLinuxCheckFixtures(t *testing.T) {
+	originalNow := auditNow
+	auditNow = func() time.Time { return time.Date(2026, time.May, 6, 12, 0, 0, 0, time.UTC) }
+	defer func() { auditNow = originalNow }()
+
 	fixtures := []struct {
 		name       string
 		checkKey   string
@@ -240,10 +244,64 @@ func TestNormalizeLinuxCheckFixtures(t *testing.T) {
 			wantStatus: "pass",
 		},
 		{
-			name:       "unsupported os evidence collected",
+			name:       "ubuntu 24 is supported",
 			checkKey:   "unsupported_os_version",
-			outputs:    outputs(out("os_release", 0, "PRETTY_NAME=\"Ubuntu 24.04.4 LTS\"\n")),
+			outputs:    outputs(out("os_release", 0, "NAME=\"Ubuntu\"\nID=ubuntu\nVERSION_ID=\"24.04\"\nPRETTY_NAME=\"Ubuntu 24.04.4 LTS\"\n")),
+			wantStatus: "pass",
+		},
+		{
+			name:       "ubuntu 20 requires extended support",
+			checkKey:   "unsupported_os_version",
+			outputs:    outputs(out("os_release", 0, "NAME=\"Ubuntu\"\nID=ubuntu\nVERSION_ID=\"20.04\"\nPRETTY_NAME=\"Ubuntu 20.04.6 LTS\"\n")),
 			wantStatus: "warning",
+			wantField:  "support_phase",
+			wantValue:  "extended_support",
+		},
+		{
+			name:       "debian 12 is supported",
+			checkKey:   "unsupported_os_version",
+			outputs:    outputs(out("os_release", 0, "PRETTY_NAME=\"Debian GNU/Linux 12 (bookworm)\"\nID=debian\nVERSION_ID=\"12\"\n")),
+			wantStatus: "pass",
+			wantField:  "support_phase",
+			wantValue:  "standard_support",
+		},
+		{
+			name:       "debian 11 is in lts",
+			checkKey:   "unsupported_os_version",
+			outputs:    outputs(out("os_release", 0, "PRETTY_NAME=\"Debian GNU/Linux 11 (bullseye)\"\nID=debian\nVERSION_ID=\"11\"\n")),
+			wantStatus: "pass",
+			wantField:  "support_phase",
+			wantValue:  "lts_support",
+		},
+		{
+			name:       "alma 9 is supported",
+			checkKey:   "unsupported_os_version",
+			outputs:    outputs(out("os_release", 0, "NAME=\"AlmaLinux\"\nID=\"almalinux\"\nVERSION_ID=\"9.5\"\nPRETTY_NAME=\"AlmaLinux 9.5 (Teal Serval)\"\n")),
+			wantStatus: "pass",
+		},
+		{
+			name:       "rhel 7 needs extended support",
+			checkKey:   "unsupported_os_version",
+			outputs:    outputs(out("os_release", 0, "NAME=\"Red Hat Enterprise Linux\"\nID=\"rhel\"\nVERSION_ID=\"7.9\"\nPRETTY_NAME=\"Red Hat Enterprise Linux Server 7.9 (Maipo)\"\n")),
+			wantStatus: "warning",
+			wantField:  "support_phase",
+			wantValue:  "extended_support",
+		},
+		{
+			name:       "centos 7 is end of life",
+			checkKey:   "unsupported_os_version",
+			outputs:    outputs(out("os_release", 0, "NAME=\"CentOS Linux\"\nID=\"centos\"\nVERSION_ID=\"7\"\nPRETTY_NAME=\"CentOS Linux 7 (Core)\"\n")),
+			wantStatus: "fail",
+			wantField:  "support_phase",
+			wantValue:  "eol",
+		},
+		{
+			name:       "fedora 40 is end of life",
+			checkKey:   "unsupported_os_version",
+			outputs:    outputs(out("os_release", 0, "NAME=\"Fedora Linux\"\nID=fedora\nVERSION_ID=\"40\"\nPRETTY_NAME=\"Fedora Linux 40 (Server Edition)\"\n")),
+			wantStatus: "fail",
+			wantField:  "support_phase",
+			wantValue:  "eol",
 		},
 		{
 			name:       "unattended upgrades disabled",
