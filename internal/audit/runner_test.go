@@ -471,6 +471,32 @@ func TestNormalizeLinuxCheckFixtures(t *testing.T) {
 			outputs:    nil,
 			wantStatus: "not_applicable",
 		},
+		{
+			name:     "host software inventory detects popular stack versions",
+			checkKey: "software_inventory_host",
+			outputs: outputs(
+				out("os_release", 0, "NAME=\"Ubuntu\"\nID=ubuntu\nVERSION_ID=\"24.04\"\nPRETTY_NAME=\"Ubuntu 24.04.4 LTS\"\n"),
+				out("dpkg_packages", 0, "php8.3-cli\t8.3.6-1ubuntu1\napache2\t2.4.58-1ubuntu8\nmysql-server\t8.0.39-0ubuntu0\nnodejs\t20.15.0-1nodesource1\nopenssl\t3.0.13-0ubuntu3\n"),
+				out("php_version", 0, "php\t/usr/bin/php\tPHP 8.3.6 (cli) (built: Apr 10 2026 10:00:00)\n"),
+				out("apache2_version", 0, "apache\t/usr/sbin/apache2\tServer version: Apache/2.4.58 (Ubuntu)\n"),
+				out("mysql_version", 0, "mysql\t/usr/bin/mysql\tmysql  Ver 8.0.39 for Linux on x86_64\n"),
+				out("nodejs_version", 0, "nodejs\t/usr/bin/node\tv20.15.0\n"),
+			),
+			wantStatus: "pass",
+			wantField:  "summary",
+			wantValue:  "Detected 5 supported host software item(s).",
+		},
+		{
+			name:     "container software inventory detects image tags and exec versions",
+			checkKey: "software_inventory_containers",
+			outputs: outputs(
+				out("docker_ps", 0, "abc123\tphp:8.2-fpm\tphp-app\t0.0.0.0:9000->9000/tcp\ndef456\tredis:7.2\tredis-cache\t6379/tcp\n"),
+				out("container_version_exec", 0, "abc123\tphp:8.2-fpm\tphp-app\tphp\t/usr/local/bin/php\tPHP 8.2.17 (cli) (built: Apr 10 2026 10:00:00)\ndef456\tredis:7.2\tredis-cache\tredis\t/usr/local/bin/redis-server\tRedis server v=7.2.5 sha=00000000:0 malloc=jemalloc-5.3.0 bits=64 build=00000000\n"),
+			),
+			wantStatus: "pass",
+			wantField:  "summary",
+			wantValue:  "Detected 2 supported container software item(s).",
+		},
 	}
 
 	for _, fixture := range fixtures {
@@ -492,7 +518,7 @@ func TestNormalizeLinuxCheckFixtures(t *testing.T) {
 	}
 }
 
-func TestCommandRegistryCoversThirtyReadOnlyAuditChecks(t *testing.T) {
+func TestCommandRegistryCoversThirtyTwoReadOnlyAuditChecks(t *testing.T) {
 	expected := []string{
 		"ssh_root_login",
 		"ssh_password_auth",
@@ -524,6 +550,8 @@ func TestCommandRegistryCoversThirtyReadOnlyAuditChecks(t *testing.T) {
 		"dns_points_unknown_ip",
 		"cloudflare_proxy_disabled",
 		"origin_exposed_manual",
+		"software_inventory_host",
+		"software_inventory_containers",
 	}
 	registry := commandRegistry()
 	if len(registry) != len(expected) {
