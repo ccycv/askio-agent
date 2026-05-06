@@ -55,11 +55,27 @@ func (SystemdRunExecutor) Run(ctx context.Context, command string, args []string
 	unit := fmt.Sprintf("askio-cmd-%d", time.Now().UnixNano())
 	all := []string{"-n", "systemd-run", "--wait", "--collect", "--pipe", "--quiet", "--unit", unit, command}
 	all = append(all, args...)
-	return ExecSimple(ctx, "sudo", all, timeoutSeconds)
+	result, err := ExecSimple(ctx, "sudo", all, timeoutSeconds)
+	if err == nil || !isSystemdRunTransientFailure(result.Output) {
+		return result, err
+	}
+
+	// Some distros can have systemd-run installed but unable to create transient
+	// units from the agent service context. Keep read-only checks useful by
+	// falling back to the same non-interactive sudo execution used when
+	// systemd-run is unavailable.
+	return SudoExecutor{}.Run(ctx, command, args, timeoutSeconds)
 }
 
 func (SystemdRunExecutor) Format(command string, args []string) string {
 	return "sudo -n systemd-run --wait --collect --pipe --quiet --unit askio-cmd-<ts> " + command + " " + strings.Join(args, " ")
+}
+
+func isSystemdRunTransientFailure(output string) bool {
+	normalized := strings.ToLower(output)
+	return strings.Contains(normalized, "failed to start transient service unit") ||
+		strings.Contains(normalized, "connection reset by peer") ||
+		strings.Contains(normalized, "transport endpoint is not connected")
 }
 
 func (RootExecutor) Run(ctx context.Context, command string, args []string, timeoutSeconds int) (ExecResult, error) {
