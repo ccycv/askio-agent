@@ -153,7 +153,7 @@ func commandRegistry() map[string][]commandSpec {
 		"ssh_root_login":               {{Name: "sshd_effective_config", Command: "sshd", Args: []string{"-T"}, TimeoutSeconds: 10}, {Name: "sshd_config", Command: "cat", Args: []string{"/etc/ssh/sshd_config"}, TimeoutSeconds: 10}},
 		"ssh_password_auth":            {{Name: "sshd_effective_config", Command: "sshd", Args: []string{"-T"}, TimeoutSeconds: 10}, {Name: "sshd_config", Command: "cat", Args: []string{"/etc/ssh/sshd_config"}, TimeoutSeconds: 10}},
 		"ssh_weak_ciphers_manual":      {{Name: "sshd_config", Command: "cat", Args: []string{"/etc/ssh/sshd_config"}, TimeoutSeconds: 10}},
-		"sudo_users":                   {{Name: "sudo_group", Command: "getent", Args: []string{"group", "sudo"}, TimeoutSeconds: 10}, {Name: "admin_group", Command: "getent", Args: []string{"group", "admin"}, TimeoutSeconds: 10, AcceptExitCodes: []int{0, 2}, Optional: true}},
+		"sudo_users":                   {{Name: "sudo_group", Command: "getent", Args: []string{"group", "sudo"}, TimeoutSeconds: 10, AcceptExitCodes: []int{0, 2}, Optional: true}, {Name: "admin_group", Command: "getent", Args: []string{"group", "admin"}, TimeoutSeconds: 10, AcceptExitCodes: []int{0, 2}, Optional: true}, {Name: "wheel_group", Command: "getent", Args: []string{"group", "wheel"}, TimeoutSeconds: 10, AcceptExitCodes: []int{0, 2}, Optional: true}},
 		"inactive_users_manual":        {{Name: "passwd", Command: "getent", Args: []string{"passwd"}, TimeoutSeconds: 10}},
 		"missing_mfa_manual":           []commandSpec{},
 		"public_ssh":                   {{Name: "listening_sockets", Command: "ss", Args: []string{"-tulpn"}, TimeoutSeconds: 15}},
@@ -169,8 +169,8 @@ func commandRegistry() map[string][]commandSpec {
 		"time_sync_disabled":           {{Name: "timedatectl", Command: "timedatectl", Args: []string{}, TimeoutSeconds: 10}},
 		"askio_agent_offline":          {{Name: "askio_monitor_status", Command: "systemctl", Args: []string{"is-active", "askio-monitor"}, TimeoutSeconds: 10}},
 		"failed_systemd_services":      {{Name: "failed_systemd", Command: "systemctl", Args: []string{"--failed", "--no-pager", "--plain"}, TimeoutSeconds: 20}},
-		"auth_log_missing":             {{Name: "auth_log", Command: "test", Args: []string{"-r", "/var/log/auth.log"}, TimeoutSeconds: 10, AcceptExitCodes: []int{0, 1}}},
-		"failed_login_spike":           {{Name: "auth_log_tail", Command: "tail", Args: []string{"-n", "500", "/var/log/auth.log"}, TimeoutSeconds: 20}},
+		"auth_log_missing":             {{Name: "auth_log", Command: "test", Args: []string{"-r", "/var/log/auth.log"}, TimeoutSeconds: 10, AcceptExitCodes: []int{0, 1}, Optional: true}, {Name: "secure_log", Command: "test", Args: []string{"-r", "/var/log/secure"}, TimeoutSeconds: 10, AcceptExitCodes: []int{0, 1}, Optional: true}, {Name: "sshd_journal", Command: "journalctl", Args: []string{"-u", "sshd", "-n", "50", "--no-pager"}, TimeoutSeconds: 20, AcceptExitCodes: []int{0, 1}, Optional: true}},
+		"failed_login_spike":           {{Name: "auth_log_tail", Command: "tail", Args: []string{"-n", "500", "/var/log/auth.log"}, TimeoutSeconds: 20, AcceptExitCodes: []int{0, 1}, Optional: true}, {Name: "secure_log_tail", Command: "tail", Args: []string{"-n", "500", "/var/log/secure"}, TimeoutSeconds: 20, AcceptExitCodes: []int{0, 1}, Optional: true}, {Name: "sshd_journal_tail", Command: "journalctl", Args: []string{"-u", "sshd", "-n", "500", "--no-pager"}, TimeoutSeconds: 30, AcceptExitCodes: []int{0, 1}, Optional: true}},
 		"disk_usage_critical":          {{Name: "disk_usage", Command: "df", Args: []string{"-P"}, TimeoutSeconds: 15}},
 		"backup_not_detected":          {{Name: "cron_daily", Command: "ls", Args: []string{"-la", "/etc/cron.daily"}, TimeoutSeconds: 10}, {Name: "timers", Command: "systemctl", Args: []string{"list-timers", "--all", "--no-pager"}, TimeoutSeconds: 20}},
 		"backup_older_than_threshold":  {{Name: "backup_dirs", Command: "find", Args: []string{"/var/backups", "-maxdepth", "2", "-type", "f", "-printf", "%TY-%Tm-%Td %TH:%TM %p\n"}, TimeoutSeconds: 30}},
@@ -253,7 +253,7 @@ func normalizeCheck(checkKey string, outputs []commandOutput) (string, float64, 
 		}
 		return "unknown", 0.4, summary("Failed service status could not be determined.")
 	case "auth_log_missing":
-		if commandOK {
+		if authEvidenceSourceReadable(outputs) {
 			return "pass", 0.9, summary("Auth log is present and readable.")
 		}
 		return "warning", 0.8, summary("Auth log is missing or unreadable.")
@@ -261,6 +261,9 @@ func normalizeCheck(checkKey string, outputs []commandOutput) (string, float64, 
 		count := strings.Count(combined, "failed password") + strings.Count(combined, "authentication failure")
 		if count >= 20 {
 			return "fail", 0.85, map[string]any{"summary": "High failed-login volume detected.", "failed_login_count": count}
+		}
+		if !commandOK {
+			return "unknown", 0.4, map[string]any{"summary": "Failed-login evidence could not be collected from auth logs or sshd journal.", "failed_login_count": count}
 		}
 		return "pass", 0.7, map[string]any{"summary": "No high failed-login spike was detected in the sampled auth log.", "failed_login_count": count}
 	case "disk_usage_critical":
@@ -355,6 +358,27 @@ func firstOutputLineEquals(outputs []commandOutput, expected string) bool {
 	for _, output := range outputs {
 		for _, line := range strings.Split(output.Output, "\n") {
 			if strings.ToLower(strings.TrimSpace(line)) == expected {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func authEvidenceSourceReadable(outputs []commandOutput) bool {
+	for _, output := range outputs {
+		if output.ExitCode != 0 {
+			continue
+		}
+		switch output.Name {
+		case "auth_log", "secure_log":
+			return true
+		case "sshd_journal":
+			normalized := strings.ToLower(strings.TrimSpace(output.Output))
+			if normalized != "" &&
+				!strings.Contains(normalized, "no entries") &&
+				!strings.Contains(normalized, "no journal files") &&
+				!strings.Contains(normalized, "failed to") {
 				return true
 			}
 		}

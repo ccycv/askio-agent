@@ -144,6 +144,12 @@ func TestNormalizeLinuxCheckFixtures(t *testing.T) {
 			wantStatus: "warning",
 		},
 		{
+			name:       "wheel users evidence collected",
+			checkKey:   "sudo_users",
+			outputs:    outputs(out("sudo_group", 2, ""), out("wheel_group", 0, "wheel:x:10:root,admin\n")),
+			wantStatus: "warning",
+		},
+		{
 			name:       "inactive users evidence collected",
 			checkKey:   "inactive_users_manual",
 			outputs:    outputs(out("passwd", 0, "root:x:0:0:root:/root:/bin/bash\n")),
@@ -186,6 +192,12 @@ func TestNormalizeLinuxCheckFixtures(t *testing.T) {
 			wantStatus: "fail",
 		},
 		{
+			name:       "rhel public redis listener",
+			checkKey:   "public_redis",
+			outputs:    socketOutputs("tcp LISTEN 0 511 *:6379 *:* users:((\"redis-server\",pid=123,fd=6))"),
+			wantStatus: "fail",
+		},
+		{
 			name:       "docker socket detected",
 			checkKey:   "public_docker_socket",
 			outputs:    outputs(out("docker_socket", 0, "srw-rw---- 1 root docker 0 May 5 10:00 /var/run/docker.sock\n")),
@@ -201,6 +213,12 @@ func TestNormalizeLinuxCheckFixtures(t *testing.T) {
 			name:       "pending security updates",
 			checkKey:   "pending_security_updates",
 			outputs:    outputs(out("apt_upgradable", 0, "Listing...\nopenssl/jammy-security 3.0.2 amd64 [upgradable from: 3.0.1]\n")),
+			wantStatus: "warning",
+		},
+		{
+			name:       "dnf security updates",
+			checkKey:   "pending_security_updates",
+			outputs:    outputs(out("apt_upgradable", 1, ""), out("dnf_updates", 100, "Security: RHSA-2026:1001 Important/Sec. kernel.x86_64 5.14.0-1.el9 updates\n")),
 			wantStatus: "warning",
 		},
 		{
@@ -288,12 +306,40 @@ func TestNormalizeLinuxCheckFixtures(t *testing.T) {
 			wantStatus: "pass",
 		},
 		{
+			name:       "rhel secure log readable",
+			checkKey:   "auth_log_missing",
+			outputs:    outputs(out("auth_log", 1, ""), out("secure_log", 0, "")),
+			wantStatus: "pass",
+		},
+		{
+			name:       "sshd journal readable",
+			checkKey:   "auth_log_missing",
+			outputs:    outputs(out("auth_log", 1, ""), out("secure_log", 1, ""), out("sshd_journal", 0, "May 06 host sshd[1]: Server listening on 0.0.0.0 port 22.\n")),
+			wantStatus: "pass",
+		},
+		{
 			name:       "failed login spike",
 			checkKey:   "failed_login_spike",
 			outputs:    outputs(out("auth_log_tail", 0, strings.Repeat("authentication failure\n", 20))),
 			wantStatus: "fail",
 			wantField:  "failed_login_count",
 			wantValue:  20,
+		},
+		{
+			name:       "rhel failed login spike",
+			checkKey:   "failed_login_spike",
+			outputs:    outputs(out("auth_log_tail", 1, ""), out("secure_log_tail", 0, strings.Repeat("Failed password for root from 1.2.3.4 port 22 ssh2\n", 20))),
+			wantStatus: "fail",
+			wantField:  "failed_login_count",
+			wantValue:  20,
+		},
+		{
+			name:       "failed login evidence unavailable",
+			checkKey:   "failed_login_spike",
+			outputs:    outputs(out("auth_log_tail", 1, ""), out("secure_log_tail", 1, ""), out("sshd_journal_tail", 1, "")),
+			wantStatus: "unknown",
+			wantField:  "failed_login_count",
+			wantValue:  0,
 		},
 		{
 			name:       "low failed login count",
