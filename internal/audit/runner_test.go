@@ -2,6 +2,7 @@ package audit
 
 import (
 	"context"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -344,6 +345,8 @@ func TestNormalizeLinuxCheckFixtures(t *testing.T) {
 			checkKey:   "failed_systemd_services",
 			outputs:    outputs(out("failed_systemd", 0, "UNIT LOAD ACTIVE SUB DESCRIPTION\nbad.service loaded failed failed Bad service\n1 loaded units listed.\n")),
 			wantStatus: "warning",
+			wantField:  "failed_services",
+			wantValue:  []string{"bad.service"},
 		},
 		{
 			name:       "no failed systemd services",
@@ -511,7 +514,7 @@ func TestNormalizeLinuxCheckFixtures(t *testing.T) {
 			if normalized["summary"] == "" {
 				t.Fatalf("expected normalized summary, got %#v", normalized)
 			}
-			if fixture.wantField != "" && normalized[fixture.wantField] != fixture.wantValue {
+			if fixture.wantField != "" && !reflect.DeepEqual(normalized[fixture.wantField], fixture.wantValue) {
 				t.Fatalf("expected normalized %s=%#v, got %#v", fixture.wantField, fixture.wantValue, normalized)
 			}
 		})

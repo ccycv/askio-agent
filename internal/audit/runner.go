@@ -278,7 +278,12 @@ func normalizeCheck(checkKey string, outputs []commandOutput) (string, float64, 
 			return "pass", 0.9, summary("No failed systemd services were detected.")
 		}
 		if strings.Contains(combined, "loaded units listed") || strings.Contains(combined, ".service") {
-			return "warning", 0.8, summary("Failed systemd services were detected.")
+			failedServices := failedSystemdServices(outputs)
+			normalized := map[string]any{"summary": "Failed systemd services were detected."}
+			if len(failedServices) > 0 {
+				normalized["failed_services"] = failedServices
+			}
+			return "warning", 0.8, normalized
 		}
 		return "unknown", 0.4, summary("Failed service status could not be determined.")
 	case "auth_log_missing":
@@ -419,6 +424,37 @@ func authEvidenceSourceReadable(outputs []commandOutput) bool {
 		}
 	}
 	return false
+}
+
+func failedSystemdServices(outputs []commandOutput) []string {
+	services := make([]string, 0)
+	seen := map[string]struct{}{}
+	for _, output := range outputs {
+		if output.Name != "failed_systemd" || strings.TrimSpace(output.Output) == "" {
+			continue
+		}
+		for _, line := range strings.Split(output.Output, "\n") {
+			line = strings.TrimSpace(line)
+			if line == "" {
+				continue
+			}
+			fields := strings.Fields(line)
+			if len(fields) == 0 {
+				continue
+			}
+			unit := fields[0]
+			if !strings.HasSuffix(unit, ".service") {
+				continue
+			}
+			if _, ok := seen[unit]; ok {
+				continue
+			}
+			seen[unit] = struct{}{}
+			services = append(services, unit)
+		}
+	}
+	sort.Strings(services)
+	return services
 }
 
 func summary(text string) map[string]any {
