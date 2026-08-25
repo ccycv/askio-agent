@@ -123,6 +123,7 @@ type Broker struct {
 	config          BrokerConfig
 	resolver        *ScopeResolver
 	allowedUID      uint32
+	allowedGID      uint32
 	allowedServices map[string]struct{}
 	backendPublic   ed25519.PublicKey
 	mu              sync.Mutex
@@ -131,16 +132,24 @@ type Broker struct {
 	state           brokerPersistentState
 }
 
-func resolveUserID(name string) (uint32, error) {
+func parseUserIDs(account *user.User) (uint32, uint32, error) {
+	uid, err := strconv.ParseUint(account.Uid, 10, 32)
+	if err != nil {
+		return 0, 0, fmt.Errorf("parse user ID: %w", err)
+	}
+	gid, err := strconv.ParseUint(account.Gid, 10, 32)
+	if err != nil {
+		return 0, 0, fmt.Errorf("parse primary group ID: %w", err)
+	}
+	return uint32(uid), uint32(gid), nil
+}
+
+func resolveUserIDs(name string) (uint32, uint32, error) {
 	account, err := user.Lookup(name)
 	if err != nil {
-		return 0, err
+		return 0, 0, err
 	}
-	value, err := strconv.ParseUint(account.Uid, 10, 32)
-	if err != nil {
-		return 0, err
-	}
-	return uint32(value), nil
+	return parseUserIDs(account)
 }
 
 func NewBroker(config BrokerConfig) (*Broker, error) {
@@ -154,7 +163,7 @@ func NewBroker(config BrokerConfig) (*Broker, error) {
 	if err != nil {
 		return nil, err
 	}
-	uid, err := resolveUserID(config.AgentUser)
+	uid, gid, err := resolveUserIDs(config.AgentUser)
 	if err != nil {
 		return nil, fmt.Errorf("resolve migration agent user: %w", err)
 	}
@@ -173,7 +182,7 @@ func NewBroker(config BrokerConfig) (*Broker, error) {
 		allowed[service] = struct{}{}
 	}
 	broker := &Broker{
-		config: config, resolver: resolver, allowedUID: uid, allowedServices: allowed, backendPublic: backendPublic,
+		config: config, resolver: resolver, allowedUID: uid, allowedGID: gid, allowedServices: allowed, backendPublic: backendPublic,
 		state: brokerPersistentState{
 			SchemaVersion: "operations.migration.broker-state.v1", Fences: map[string]int64{},
 			WriterFences: map[string]writerFenceState{}, SeenNonces: []string{},
@@ -218,6 +227,10 @@ func (b *Broker) loadFences() error {
 		}
 	}
 	return nil
+}
+
+func (b *Broker) socketOwnership() (int, int) {
+	return 0, int(b.allowedGID)
 }
 
 func (b *Broker) persistFences() error {
@@ -1116,10 +1129,11 @@ func (b *Broker) handleConnection(ctx context.Context, connection *net.UnixConn)
 
 func (b *Broker) Serve(ctx context.Context) error {
 	socketDirectory := filepath.Dir(b.config.SocketPath)
+	ownerID, groupID := b.socketOwnership()
 	if err := os.MkdirAll(socketDirectory, 0o750); err != nil {
 		return err
 	}
-	if err := os.Chown(socketDirectory, 0, int(b.allowedUID)); err != nil {
+	if err := os.Chown(socketDirectory, ownerID, groupID); err != nil {
 		return err
 	}
 	if err := os.Chmod(socketDirectory, 0o750); err != nil {
@@ -1144,7 +1158,7 @@ func (b *Broker) Serve(ctx context.Context) error {
 	if err := os.Chmod(b.config.SocketPath, 0o660); err != nil {
 		return err
 	}
-	if err := os.Chown(b.config.SocketPath, 0, int(b.allowedUID)); err != nil {
+	if err := os.Chown(b.config.SocketPath, ownerID, groupID); err != nil {
 		return err
 	}
 	go func() {
