@@ -134,6 +134,86 @@ func TestPostgresPrivilegeAllowlistCoversSupportedServerMajors(t *testing.T) {
 	}
 }
 
+func TestPostgresContentManifestDigestIsPortableAcrossSupportedMajors(t *testing.T) {
+	base := postgresManifest{
+		SchemaVersion: "operations.migration.postgres-manifest.v1",
+		ServerMajor:   14,
+		Encoding:      "UTF8",
+		Collation:     "C.UTF-8",
+		CType:         "C.UTF-8",
+		Extensions:    []string{"plpgsql@1.0"},
+		Tables: []postgresTableManifest{{
+			Schema: "public", Name: "widgets", Kind: "r", RowCount: 3,
+			SampleChecksum: strings.Repeat("a", 32),
+		}},
+		Sequences:          []postgresSequenceManifest{},
+		ObjectCounts:       map[string]int64{"constraints": 1, "functions": 0, "indexes": 1, "schemas": 0, "triggers": 0},
+		NormalizedOwners:   []string{"askio_mig_owner"},
+		NormalizedGrantees: []string{"PUBLIC", "askio_mig_owner"},
+		Privileges: []postgresPrivilegeManifest{
+			{ObjectType: "SCHEMA", Schema: "public", Grantee: "PUBLIC", Privilege: "USAGE"},
+			{ObjectType: "TABLE", Schema: "public", Name: "widgets", Grantee: "askio_mig_owner", Privilege: "SELECT"},
+		},
+	}
+	target := base
+	target.ServerMajor = 16
+	target.Privileges = append(append([]postgresPrivilegeManifest{}, base.Privileges...),
+		postgresPrivilegeManifest{ObjectType: "TABLE", Schema: "public", Name: "widgets", Grantee: "askio_mig_owner", Privilege: "MAINTAIN"})
+	sourceDigest, err := postgresContentManifestDigest(base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	targetDigest, err := postgresContentManifestDigest(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sourceDigest != targetDigest {
+		t.Fatalf("portable PostgreSQL content changed across supported majors: source=%s target=%s", sourceDigest, targetDigest)
+	}
+}
+
+func TestPostgresContentManifestDigestStillBindsDataAndGrantOptions(t *testing.T) {
+	base := postgresManifest{
+		SchemaVersion:      "operations.migration.postgres-manifest.v1",
+		ServerMajor:        14,
+		Encoding:           "UTF8",
+		Collation:          "C.UTF-8",
+		CType:              "C.UTF-8",
+		Extensions:         []string{},
+		Tables:             []postgresTableManifest{{Schema: "public", Name: "widgets", Kind: "r", RowCount: 1, SampleChecksum: strings.Repeat("a", 32)}},
+		Sequences:          []postgresSequenceManifest{},
+		ObjectCounts:       map[string]int64{},
+		NormalizedOwners:   []string{"askio_mig_owner"},
+		NormalizedGrantees: []string{"askio_mig_owner"},
+		Privileges:         []postgresPrivilegeManifest{},
+	}
+	baseDigest, err := postgresContentManifestDigest(base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	changedData := base
+	changedData.Tables = append([]postgresTableManifest{}, base.Tables...)
+	changedData.Tables[0].SampleChecksum = strings.Repeat("b", 32)
+	changedDataDigest, err := postgresContentManifestDigest(changedData)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if changedDataDigest == baseDigest {
+		t.Fatal("portable PostgreSQL content digest did not bind table data")
+	}
+	changedGrant := base
+	changedGrant.Privileges = []postgresPrivilegeManifest{{
+		ObjectType: "TABLE", Schema: "public", Name: "widgets", Grantee: "askio_mig_owner", Privilege: "SELECT", Grantable: true,
+	}}
+	changedGrantDigest, err := postgresContentManifestDigest(changedGrant)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if changedGrantDigest == baseDigest {
+		t.Fatal("portable PostgreSQL content digest did not bind explicit grant options")
+	}
+}
+
 func TestRequiredPostgresExtensionsMustBeBoundedCanonicalAndVersioned(t *testing.T) {
 	values, err := requiredPostgresExtensionsInput(map[string]any{
 		"required_extensions": []any{"pgcrypto@1.3", "plpgsql@1.0"},

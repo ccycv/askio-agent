@@ -12,11 +12,11 @@ import (
 	"time"
 )
 
-const postgresDisposableIntegrationGate = "disposable-postgres-16"
+const postgresDisposableIntegrationGate = "disposable-postgres-14-to-16"
 
 func TestPostgresOfflineMigrationCycle(t *testing.T) {
 	if os.Getenv("ASKIO_MIGRATION_POSTGRES_INTEGRATION") != postgresDisposableIntegrationGate {
-		t.Skip("set ASKIO_MIGRATION_POSTGRES_INTEGRATION=disposable-postgres-16 inside the disposable fixture")
+		t.Skip("set ASKIO_MIGRATION_POSTGRES_INTEGRATION=disposable-postgres-14-to-16 inside the disposable fixture")
 	}
 
 	sourceSocket := os.Getenv("ASKIO_MIGRATION_POSTGRES_SOURCE_SOCKET")

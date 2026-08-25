@@ -93,6 +93,7 @@ func NewDaemon(logger *slog.Logger, cfg cfgpkg.Config) (*Daemon, error) {
 			st.Close()
 			return nil, fmt.Errorf("create migration executor: %w", err)
 		}
+		executor.SetLogger(logger)
 		if err := executor.ConfigureDataPlaneIdentity(cfg.AgentID, cfg.Migration.BackendTaskSigningKeyID, cfg.Migration.BackendTaskSigningPublicKeyPEMBase64, identity); err != nil {
 			st.Close()
 			return nil, fmt.Errorf("configure migration data plane: %w", err)

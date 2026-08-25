@@ -55,7 +55,7 @@ docker run --detach --rm \
   --env POSTGRES_PASSWORD=fixture-pass \
   --tmpfs /var/lib/postgresql/data:rw,uid=999,gid=999,mode=0700 \
   --volume "${source_socket_volume}:/var/run/postgresql" \
-  postgres:16 -c listen_addresses= >/dev/null
+  postgres:14 -c listen_addresses= >/dev/null
 docker run --detach --rm \
   --name "${target_container}" \
   --env POSTGRES_PASSWORD=fixture-pass \
@@ -82,7 +82,7 @@ docker run --rm \
   --volume "${binary_volume}:/work:ro" \
   --volume "${source_socket_volume}:/sockets/source" \
   --volume "${target_socket_volume}:/sockets/target" \
-  --env ASKIO_MIGRATION_POSTGRES_INTEGRATION=disposable-postgres-16 \
+  --env ASKIO_MIGRATION_POSTGRES_INTEGRATION=disposable-postgres-14-to-16 \
   --env ASKIO_MIGRATION_POSTGRES_SOURCE_SOCKET=/sockets/source \
   --env ASKIO_MIGRATION_POSTGRES_TARGET_SOCKET=/sockets/target \
   --env ASKIO_MIGRATION_POSTGRES_PASSWORD=fixture-pass \

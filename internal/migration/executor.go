@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/url"
@@ -45,6 +46,7 @@ type NativeExecutor struct {
 	backendKeyID  string
 	backendPublic ed25519.PublicKey
 	capacityCheck func(string, int64) error
+	logger        *slog.Logger
 }
 
 func (e *NativeExecutor) ensureCapacity(path string, requiredBytes int64) error {
@@ -74,6 +76,10 @@ func (e *NativeExecutor) SetBindingResolver(resolver BindingResolver) {
 
 func (e *NativeExecutor) SetTicketResolver(resolver TicketResolver) {
 	e.tickets = resolver
+}
+
+func (e *NativeExecutor) SetLogger(logger *slog.Logger) {
+	e.logger = logger
 }
 
 func (e *NativeExecutor) ConfigureDataPlaneIdentity(agentID, backendKeyID, backendPublicKeyBase64 string, identity *Identity) error {
@@ -387,6 +393,14 @@ func (e *NativeExecutor) Execute(ctx context.Context, task TaskEnvelope, progres
 		// Primitive errors may contain local filesystem or socket details from
 		// operating-system calls. Keep task/result records path-free; detailed
 		// diagnostics remain local to the host runtime.
+		if e.logger != nil {
+			e.logger.Error("migration primitive failed safely",
+				"migration_id", task.MigrationID,
+				"attempt_id", task.AttemptID,
+				"primitive", task.Primitive.ID,
+				"err", err,
+			)
+		}
 		return fail("MIGRATION_PRIMITIVE_FAILED_SAFE", "The migration primitive failed safely. Review the host-local diagnostics before retrying.", false)
 	}
 	if outputs == nil {

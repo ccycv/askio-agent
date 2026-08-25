@@ -279,6 +279,51 @@ type postgresManifest struct {
 	Privileges         []postgresPrivilegeManifest `json:"privileges"`
 }
 
+type postgresContentManifest struct {
+	SchemaVersion      string                      `json:"schema_version"`
+	Encoding           string                      `json:"encoding"`
+	Collation          string                      `json:"collation"`
+	CType              string                      `json:"ctype"`
+	Extensions         []string                    `json:"extensions"`
+	Tables             []postgresTableManifest     `json:"tables"`
+	Sequences          []postgresSequenceManifest  `json:"sequences"`
+	ObjectCounts       map[string]int64            `json:"object_counts"`
+	NormalizedOwners   []string                    `json:"normalized_owners"`
+	NormalizedGrantees []string                    `json:"normalized_grantees"`
+	Privileges         []postgresPrivilegeManifest `json:"privileges"`
+}
+
+func postgresContentManifestDigest(manifest postgresManifest) (string, error) {
+	ownerSet := make(map[string]struct{}, len(manifest.NormalizedOwners))
+	for _, owner := range manifest.NormalizedOwners {
+		ownerSet[owner] = struct{}{}
+	}
+	portablePrivileges := make([]postgresPrivilegeManifest, 0, len(manifest.Privileges))
+	for _, privilege := range manifest.Privileges {
+		_, isOwner := ownerSet[privilege.Grantee]
+		if isOwner && !privilege.Grantable {
+			// Object ownership already provides these privileges. PostgreSQL adds
+			// new owner-only privileges across supported majors (for example,
+			// MAINTAIN in PostgreSQL 15), so they are not portable content.
+			continue
+		}
+		portablePrivileges = append(portablePrivileges, privilege)
+	}
+	return Digest(postgresContentManifest{
+		SchemaVersion:      "operations.migration.postgres-content-manifest.v1",
+		Encoding:           manifest.Encoding,
+		Collation:          manifest.Collation,
+		CType:              manifest.CType,
+		Extensions:         manifest.Extensions,
+		Tables:             manifest.Tables,
+		Sequences:          manifest.Sequences,
+		ObjectCounts:       manifest.ObjectCounts,
+		NormalizedOwners:   manifest.NormalizedOwners,
+		NormalizedGrantees: manifest.NormalizedGrantees,
+		Privileges:         portablePrivileges,
+	})
+}
+
 type postgresACLArtifact struct {
 	SchemaVersion string                      `json:"schema_version"`
 	RoleMapDigest string                      `json:"role_map_digest"`
@@ -604,7 +649,7 @@ func (e *NativeExecutor) inspectPostgres(ctx context.Context, bindingID string, 
 		return postgresInspection{}, err
 	}
 	inspection.Manifest = manifest
-	inspection.ManifestDigest, err = Digest(manifest)
+	inspection.ManifestDigest, err = postgresContentManifestDigest(manifest)
 	if err != nil {
 		return postgresInspection{}, err
 	}
