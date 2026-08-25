@@ -54,6 +54,13 @@ func safeCommandVersion(ctx context.Context, paths []string, args ...string) (st
 	return "", false
 }
 
+func dockerClientVersion(ctx context.Context, paths []string) (string, bool) {
+	// `docker version` contacts the daemon even when formatting only the client
+	// field. Discovery runs as the unprivileged agent user, so use the static
+	// client probe and leave daemon access to the typed migration broker.
+	return safeCommandVersion(ctx, paths, "--version")
+}
+
 func parseOSRelease() map[string]any {
 	result := map[string]any{}
 	data, err := os.ReadFile("/etc/os-release")
@@ -151,7 +158,7 @@ func CollectObservation(ctx context.Context, task TaskEnvelope, rootHandles map[
 		Key: "platform.host", Kind: "platform", Provenance: []string{"observed:/etc/os-release", "observed:uname"}, Confidence: 1,
 		Value: map[string]any{"os": runtime.GOOS, "architecture": runtime.GOARCH, "kernel": kernelVersion(), "cpu_count": runtime.NumCPU(), "memory_bytes": memoryTotalBytes(), "release": parseOSRelease()},
 	}}
-	if version, ok := safeCommandVersion(collectorContext, []string{"/usr/bin/docker", "/usr/local/bin/docker"}, "version", "--format", "{{.Client.Version}}"); ok {
+	if version, ok := dockerClientVersion(collectorContext, []string{"/usr/bin/docker", "/usr/local/bin/docker"}); ok {
 		facts = append(facts, ObservationFact{Key: "runtime.docker", Kind: "runtime", Value: map[string]any{"version": version, "available": true}, Provenance: []string{"observed:docker-client-version"}, Confidence: 1})
 	} else {
 		facts = append(facts, ObservationFact{Key: "runtime.docker", Kind: "runtime", Value: map[string]any{"available": false}, Provenance: []string{"observed:fixed-binary-probe"}, Confidence: 1})
