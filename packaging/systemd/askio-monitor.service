@@ -2,6 +2,8 @@
 Description=Askio Monitor Agent
 After=network-online.target
 Wants=network-online.target
+Requires=askio-migration-broker.service
+After=askio-migration-broker.service
 
 [Service]
 Type=simple
@@ -15,6 +17,13 @@ NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=true
 PrivateTmp=true
+PrivateDevices=true
+RestrictSUIDSGID=true
+LockPersonality=true
+RuntimeDirectory=askio-monitor
+RuntimeDirectoryMode=0700
+RuntimeDirectoryPreserve=yes
+ReadWritePaths=/run/askio-monitor /var/lib/askio-monitor /srv/askio-migrations /var/lib/askio-migrations
 
 [Install]
 WantedBy=multi-user.target

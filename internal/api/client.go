@@ -4,14 +4,14 @@ import (
 	"bytes"
 	"context"
 	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
-	"path"
-	"crypto/x509"
 	"os"
+	"path"
 	"time"
 
 	"github.com/askio-cloud/askio-monitor/internal/version"
@@ -24,13 +24,24 @@ type Client struct {
 	userAgent string
 }
 
+type StatusError struct {
+	Method     string
+	Endpoint   string
+	StatusCode int
+	Body       string
+}
+
+func (e *StatusError) Error() string {
+	return fmt.Sprintf("api %s %s failed: status=%d body=%s", e.Method, e.Endpoint, e.StatusCode, e.Body)
+}
+
 type Options struct {
-	BaseURL   string
-	Token     string
-	Timeout   time.Duration
-	UserAgent string
+	BaseURL       string
+	Token         string
+	Timeout       time.Duration
+	UserAgent     string
 	TLSSkipVerify bool
-	CACertPath string
+	CACertPath    string
 }
 
 func New(opts Options) (*Client, error) {
@@ -109,7 +120,7 @@ func (c *Client) doJSON(ctx context.Context, method, endpoint string, in any, ou
 
 	rb, _ := io.ReadAll(io.LimitReader(resp.Body, 2<<20))
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("api %s %s failed: status=%d body=%s", method, endpoint, resp.StatusCode, string(rb))
+		return &StatusError{Method: method, Endpoint: endpoint, StatusCode: resp.StatusCode, Body: string(rb)}
 	}
 	if out == nil {
 		return nil
@@ -118,6 +129,44 @@ func (c *Client) doJSON(ctx context.Context, method, endpoint string, in any, ou
 		return nil
 	}
 	return json.Unmarshal(rb, out)
+}
+
+// PostMigration calls a migration-specific agent route. A 204 claim is a
+// normal empty queue response and is surfaced to the caller without an error.
+func (c *Client) PostMigration(ctx context.Context, route string, payload any, out any) (int, error) {
+	if route == "" {
+		return 0, fmt.Errorf("migration route is required")
+	}
+	ep := c.endpoint(route)
+	b, err := json.Marshal(payload)
+	if err != nil {
+		return 0, err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, ep, bytes.NewReader(b))
+	if err != nil {
+		return 0, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+c.token)
+	req.Header.Set("User-Agent", c.userAgent)
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return 0, err
+	}
+	defer resp.Body.Close()
+	rb, _ := io.ReadAll(io.LimitReader(resp.Body, 2<<20))
+	if resp.StatusCode == http.StatusNoContent {
+		return resp.StatusCode, nil
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return resp.StatusCode, &StatusError{Method: http.MethodPost, Endpoint: ep, StatusCode: resp.StatusCode, Body: string(rb)}
+	}
+	if out != nil && len(rb) > 0 {
+		if err := json.Unmarshal(rb, out); err != nil {
+			return resp.StatusCode, err
+		}
+	}
+	return resp.StatusCode, nil
 }
 
 func (c *Client) GetConfig(ctx context.Context, serverID string, out any) error {

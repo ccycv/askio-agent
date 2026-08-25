@@ -7,8 +7,11 @@ Lightweight Go agent for:
 - **Resource telemetry** in heartbeat (CPU/memory/disk/network/processes)
 - **Safe remediation** via built-in, allowlisted playbooks
 - **Operations Platform actions** (script/plan/playbook/ansible) including `command.run`
+- **Native Askio Ops migration assessment** through the same daemon identity and heartbeat/task loop
 
 Non-goals (v1): full metrics/log aggregation or “AI runs arbitrary commands”.
+
+Migration support does not install or run a second public agent. A migration-enabled host uses this same `askio-monitor` daemon with an additional signed-task runner. Its optional root-owned typed broker independently verifies each backend-signed task envelope and has separate root-only replay/fencing state. The bounded V1 direct-transfer, PostgreSQL, filesystem, Compose, validation, writer-fence, evidence, and cleanup primitives are implemented locally; production use remains disabled until Askio's independent security review, two-distinct-host drill, promoted Linux `amd64` artifact, and deployment gates are complete.
 
 ---
 
@@ -20,6 +23,7 @@ Non-goals (v1): full metrics/log aggregation or “AI runs arbitrary commands”
 - `internal/checks/*` – monitoring checks (active_state/port/http)
 - `internal/remediation/*` – playbooks + executor (root/sudo), redaction
 - `internal/operations/*` – Operations Platform runner + handlers (service/package/check/command)
+- `internal/migration/*` – signed migration tasks, read-only discovery, scoped primitives, and typed broker protocol
 - `internal/gateway/*` – optional gateway reverse-proxy mode
 - `internal/api/*` – HTTP client and payloads
 - `packaging/*` – systemd unit + sudoers templates

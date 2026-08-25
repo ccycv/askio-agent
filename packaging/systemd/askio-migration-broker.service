@@ -1,0 +1,23 @@
+[Unit]
+Description=Askio Typed Migration Privilege Broker
+After=local-fs.target
+Before=askio-monitor.service
+
+[Service]
+Type=simple
+User=root
+Group=root
+ExecStart=/usr/local/bin/askio-monitor migration-broker --config /etc/askio/monitor.conf
+Restart=on-failure
+RestartSec=3
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+RestrictSUIDSGID=true
+LockPersonality=true
+ReadWritePaths=/var/lib/askio-migration-broker /run/askio-migration-broker -/run/askio-monitor /srv/askio-migrations /var/lib/askio-migrations
+
+[Install]
+WantedBy=multi-user.target

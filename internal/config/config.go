@@ -3,8 +3,11 @@ package config
 import (
 	"errors"
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"time"
 
 	"gopkg.in/yaml.v3"
@@ -20,24 +23,44 @@ const (
 )
 
 type Config struct {
-	Mode                     string        `yaml:"mode"`
-	APIURL                    string        `yaml:"api_url"`
-	ServerID                  string        `yaml:"server_id"`
-	AgentToken                string        `yaml:"agent_token"`
-	TLSSkipVerify             bool          `yaml:"tls_skip_verify"`
-	CACertPath                string        `yaml:"ca_cert_path"`
-	PrivilegeMode             PrivilegeMode `yaml:"privilege_mode"`
-	HeartbeatIntervalSeconds  int           `yaml:"heartbeat_interval_seconds"`
-	ConfigPollIntervalSeconds int           `yaml:"config_poll_interval_seconds"`
-	DiscoveryPollIntervalSeconds int        `yaml:"discovery_poll_interval_seconds"`
-	LogLevel                  string        `yaml:"log_level"`
+	Mode                         string        `yaml:"mode"`
+	APIURL                       string        `yaml:"api_url"`
+	ServerID                     string        `yaml:"server_id"`
+	AgentID                      string        `yaml:"agent_id,omitempty"`
+	AgentToken                   string        `yaml:"agent_token"`
+	TLSSkipVerify                bool          `yaml:"tls_skip_verify"`
+	CACertPath                   string        `yaml:"ca_cert_path"`
+	PrivilegeMode                PrivilegeMode `yaml:"privilege_mode"`
+	HeartbeatIntervalSeconds     int           `yaml:"heartbeat_interval_seconds"`
+	ConfigPollIntervalSeconds    int           `yaml:"config_poll_interval_seconds"`
+	DiscoveryPollIntervalSeconds int           `yaml:"discovery_poll_interval_seconds"`
+	LogLevel                     string        `yaml:"log_level"`
 
 	// Local state/cache
 	DataDir string `yaml:"data_dir"`
 
 	Operations *OperationsConfig `yaml:"operations,omitempty"`
 
+	Migration *MigrationConfig `yaml:"migration,omitempty"`
+
 	Gateway *GatewayConfig `yaml:"gateway,omitempty"`
+}
+
+// MigrationConfig extends the existing host agent with the migration task
+// protocol. It does not create a second agent identity or control plane.
+type MigrationConfig struct {
+	Enabled                              bool              `yaml:"enabled"`
+	KeyDir                               string            `yaml:"key_dir"`
+	StateDir                             string            `yaml:"state_dir"`
+	BrokerSocket                         string            `yaml:"broker_socket"`
+	DataPlaneListenAddress               string            `yaml:"data_plane_listen_address,omitempty"`
+	AllowedRoots                         []string          `yaml:"allowed_roots"`
+	RootHandles                          map[string]string `yaml:"root_handles"`
+	AllowedServices                      []string          `yaml:"allowed_services"`
+	BackendTaskSigningKeyID              string            `yaml:"backend_task_signing_key_id"`
+	BackendTaskSigningPublicKeyPEMBase64 string            `yaml:"backend_task_signing_public_key_pem_base64"`
+	PollIntervalSeconds                  int               `yaml:"poll_interval_seconds"`
+	GenericHelperEnabled                 bool              `yaml:"generic_helper_enabled"`
 }
 
 type OperationsConfig struct {
@@ -52,11 +75,11 @@ type OperationsConfig struct {
 }
 
 type GatewayConfig struct {
-	ListenAddr     string `yaml:"listen_addr"`
-	TLSCertPath    string `yaml:"tls_cert_path"`
-	TLSKeyPath     string `yaml:"tls_key_path"`
-	TokenHMACKey   string `yaml:"token_hmac_key"`
-	CloudAPIURL    string `yaml:"cloud_api_url"`
+	ListenAddr      string `yaml:"listen_addr"`
+	TLSCertPath     string `yaml:"tls_cert_path"`
+	TLSKeyPath      string `yaml:"tls_key_path"`
+	TokenHMACKey    string `yaml:"token_hmac_key"`
+	CloudAPIURL     string `yaml:"cloud_api_url"`
 	CloudAgentToken string `yaml:"cloud_agent_token"`
 	GatewayServerID string `yaml:"gateway_server_id"`
 }
@@ -96,6 +119,13 @@ func (c Config) DiscoveryPollInterval() time.Duration {
 		return 6 * time.Hour
 	}
 	return time.Duration(c.DiscoveryPollIntervalSeconds) * time.Second
+}
+
+func (c Config) MigrationPollInterval() time.Duration {
+	if c.Migration == nil || c.Migration.PollIntervalSeconds <= 0 {
+		return 5 * time.Second
+	}
+	return time.Duration(c.Migration.PollIntervalSeconds) * time.Second
 }
 
 func (c Config) Normalized() (Config, error) {
@@ -154,6 +184,66 @@ func (c Config) Normalized() (Config, error) {
 	case PrivilegeModeRoot, PrivilegeModeSudo:
 	default:
 		return Config{}, fmt.Errorf("invalid privilege_mode: %q", out.PrivilegeMode)
+	}
+	if out.Migration != nil && out.Migration.Enabled {
+		if out.Mode != "host" {
+			return Config{}, fmt.Errorf("migration requires direct host mode")
+		}
+		if out.AgentID == "" {
+			return Config{}, fmt.Errorf("agent_id is required when migration is enabled")
+		}
+		if out.PrivilegeMode == PrivilegeModeRoot {
+			return Config{}, fmt.Errorf("migration requires an unprivileged main agent")
+		}
+		if out.Migration.GenericHelperEnabled {
+			return Config{}, fmt.Errorf("migration security profile forbids the generic privilege helper")
+		}
+		if out.Operations != nil && (out.Operations.AllowShell || len(out.Operations.Allowlist) > 0) {
+			return Config{}, fmt.Errorf("migration security profile forbids shell mode and executable allowlists")
+		}
+		if out.Migration.KeyDir == "" {
+			out.Migration.KeyDir = "/var/lib/askio-monitor/migration/keys"
+		}
+		if out.Migration.StateDir == "" {
+			out.Migration.StateDir = "/var/lib/askio-monitor/migration/state"
+		}
+		if out.Migration.BrokerSocket == "" {
+			out.Migration.BrokerSocket = "/run/askio-migration-broker/broker.sock"
+		}
+		if out.Migration.DataPlaneListenAddress != "" {
+			host, port, err := net.SplitHostPort(out.Migration.DataPlaneListenAddress)
+			if err != nil || strings.ContainsAny(host, "\x00\r\n\t") {
+				return Config{}, fmt.Errorf("migration data_plane_listen_address is invalid")
+			}
+			portNumber, err := strconv.Atoi(port)
+			if err != nil || portNumber < 1 || portNumber > 65535 {
+				return Config{}, fmt.Errorf("migration data_plane_listen_address requires a fixed port")
+			}
+		}
+		if len(out.Migration.RootHandles) == 0 {
+			out.Migration.RootHandles = map[string]string{"workspace": "/srv/askio-migrations", "state": "/var/lib/askio-migrations"}
+		}
+		if len(out.Migration.AllowedRoots) == 0 {
+			for _, root := range out.Migration.RootHandles {
+				out.Migration.AllowedRoots = append(out.Migration.AllowedRoots, root)
+			}
+		}
+		for _, root := range out.Migration.AllowedRoots {
+			if !filepath.IsAbs(root) || filepath.Clean(root) != root || root == "/" {
+				return Config{}, fmt.Errorf("migration allowed root must be an absolute clean non-root path: %q", root)
+			}
+		}
+		for handle, root := range out.Migration.RootHandles {
+			if len(handle) < 2 || len(handle) > 64 || strings.ContainsAny(handle, "/\\ \t\n") {
+				return Config{}, fmt.Errorf("invalid migration root handle: %q", handle)
+			}
+			if !filepath.IsAbs(root) || filepath.Clean(root) != root || root == "/" {
+				return Config{}, fmt.Errorf("migration root handle %q has an unsafe path", handle)
+			}
+		}
+		if out.Migration.BackendTaskSigningKeyID == "" || out.Migration.BackendTaskSigningPublicKeyPEMBase64 == "" {
+			return Config{}, fmt.Errorf("backend migration task-signing key is required")
+		}
 	}
 	return out, nil
 }

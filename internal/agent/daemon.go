@@ -10,11 +10,13 @@ import (
 	"os"
 	"runtime"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/askio-cloud/askio-monitor/internal/api"
 	cfgpkg "github.com/askio-cloud/askio-monitor/internal/config"
 	"github.com/askio-cloud/askio-monitor/internal/discovery"
+	"github.com/askio-cloud/askio-monitor/internal/migration"
 	"github.com/askio-cloud/askio-monitor/internal/model"
 	"github.com/askio-cloud/askio-monitor/internal/operations"
 	"github.com/askio-cloud/askio-monitor/internal/remediation"
@@ -43,6 +45,10 @@ type Daemon struct {
 	auditMu       sync.Mutex
 	auditInFlight map[string]struct{}
 	auditRecent   map[string]time.Time
+
+	migrationRunner    *migration.Runner
+	migrationDataPlane *migration.DataPlaneServer
+	migrationActive    atomic.Bool
 }
 
 func NewDaemon(logger *slog.Logger, cfg cfgpkg.Config) (*Daemon, error) {
@@ -76,6 +82,40 @@ func NewDaemon(logger *slog.Logger, cfg cfgpkg.Config) (*Daemon, error) {
 		auditInFlight:        map[string]struct{}{},
 		auditRecent:          map[string]time.Time{},
 	}
+	if cfg.Migration != nil && cfg.Migration.Enabled {
+		identity, err := migration.LoadOrCreateIdentity(cfg.Migration.KeyDir)
+		if err != nil {
+			st.Close()
+			return nil, fmt.Errorf("load migration identity: %w", err)
+		}
+		executor, err := migration.NewNativeExecutor(cfg.Migration.RootHandles, cfg.Migration.BrokerSocket, cfg.Migration.StateDir)
+		if err != nil {
+			st.Close()
+			return nil, fmt.Errorf("create migration executor: %w", err)
+		}
+		if err := executor.ConfigureDataPlaneIdentity(cfg.AgentID, cfg.Migration.BackendTaskSigningKeyID, cfg.Migration.BackendTaskSigningPublicKeyPEMBase64, identity); err != nil {
+			st.Close()
+			return nil, fmt.Errorf("configure migration data plane: %w", err)
+		}
+		runner, err := migration.NewRunner(apiClient, cfg.AgentID, identity, cfg.Migration.BackendTaskSigningKeyID, cfg.Migration.BackendTaskSigningPublicKeyPEMBase64, cfg.Migration.StateDir, executor)
+		if err != nil {
+			st.Close()
+			return nil, fmt.Errorf("create migration runner: %w", err)
+		}
+		runner.SetActivityHook(d.migrationActive.Store)
+		d.migrationRunner = runner
+		if cfg.Migration.DataPlaneListenAddress != "" {
+			dataPlane, err := migration.NewDataPlaneServer(
+				cfg.Migration.DataPlaneListenAddress, cfg.AgentID, cfg.Migration.BackendTaskSigningKeyID,
+				cfg.Migration.BackendTaskSigningPublicKeyPEMBase64, identity, cfg.Migration.RootHandles,
+			)
+			if err != nil {
+				st.Close()
+				return nil, fmt.Errorf("create migration data plane: %w", err)
+			}
+			d.migrationDataPlane = dataPlane
+		}
+	}
 
 	// Load cached remote config.
 	mgr := cfgpkg.NewRemoteConfigManager(apiClient, st)
@@ -105,6 +145,22 @@ func (d *Daemon) Run(ctx context.Context) error {
 		defer wg.Done()
 		d.heartbeatLoop(ctx)
 	}()
+	if d.migrationRunner != nil {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			d.migrationLoop(ctx)
+		}()
+	}
+	if d.migrationDataPlane != nil {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if err := d.migrationDataPlane.Serve(ctx); err != nil && ctx.Err() == nil {
+				d.logger.Error("migration data plane stopped", "err", err)
+			}
+		}()
+	}
 	go func() {
 		defer wg.Done()
 		d.configPollLoop(ctx)
@@ -121,6 +177,25 @@ func (d *Daemon) Run(ctx context.Context) error {
 	err := d.schedulerLoop(ctx)
 	wg.Wait()
 	return err
+}
+
+func (d *Daemon) migrationLoop(ctx context.Context) {
+	ticker := time.NewTicker(d.cfg.MigrationPollInterval())
+	defer ticker.Stop()
+	for {
+		handled, err := d.migrationRunner.RunOnce(ctx)
+		if err != nil && ctx.Err() == nil {
+			d.logger.Warn("migration task cycle failed safely", "err", err)
+		}
+		if handled {
+			continue
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+	}
 }
 
 func (d *Daemon) heartbeatLoop(ctx context.Context) {
@@ -151,6 +226,47 @@ func (d *Daemon) postHeartbeat(ctx context.Context) error {
 	sampled, _ := sampleHostResources(800*time.Millisecond, deviceBases)
 
 	caps := d.snapshotDetectedCapabilities()
+	reportedCapabilities := map[string]any{
+		"audit":          true,
+		"audit_config":   map[string]any{"mode": "read_only", "frameworks": []string{"nis2"}, "bundle_version": "2026.05"},
+		"monitoring":     true,
+		"operations":     true,
+		"handlers":       operations.DefaultRegistry(d.remEngExec(), d.cfg.Operations).IDs(),
+		"playbooks":      d.remEng.IDs(),
+		"privilege_mode": string(d.cfg.PrivilegeMode),
+		"operations_config": map[string]any{
+			"command_run":       true,
+			"command_run_shell": d.cfg.Operations != nil && d.cfg.Operations.AllowShell,
+			"command_run_allowlist": func() any {
+				if d.cfg.Operations == nil {
+					return []string{}
+				}
+				return d.cfg.Operations.Allowlist
+			}(),
+		},
+	}
+	if d.migrationRunner != nil {
+		reportedCapabilities["operations"] = false
+		reportedCapabilities["handlers"] = []string{}
+		reportedCapabilities["playbooks"] = []string{}
+		reportedCapabilities["operations_config"] = map[string]any{
+			"mode": "typed_migration_broker", "requires_helper": false,
+			"command_run": false, "command_run_shell": false, "command_run_allowlist": []string{},
+		}
+		for _, capability := range []string{
+			"migration.security_profile.v1", "migration.discovery.v1", "migration.task_envelope.v1",
+			"migration.preflight.v1", "migration.files_manifest.v1", "migration.compose_inspect.v1",
+			"migration.checkpoint_resume.v1", "migration.validation.v1", "migration.evidence.v1",
+			"migration.cleanup.v1", "migration.maintenance.v1", "migration.postgres_offline.v1",
+			"migration.compose_isolation.v1", "migration.quiescence.v1",
+		} {
+			reportedCapabilities[capability] = true
+		}
+		if d.migrationDataPlane != nil {
+			reportedCapabilities["migration.files_sync.v1"] = true
+			reportedCapabilities["migration.direct_mtls_chunks.v1"] = true
+		}
+	}
 
 	payload := map[string]any{
 		"server_id":              d.cfg.ServerID,
@@ -194,25 +310,7 @@ func (d *Daemon) postHeartbeat(ctx context.Context) error {
 		}(),
 		"os_info":               detectOS(),
 		"detected_capabilities": caps,
-		"capabilities": map[string]any{
-			"audit":          true,
-			"audit_config":   map[string]any{"mode": "read_only", "frameworks": []string{"nis2"}, "bundle_version": "2026.05"},
-			"monitoring":     true,
-			"operations":     true,
-			"handlers":       operations.DefaultRegistry(d.remEngExec(), d.cfg.Operations).IDs(),
-			"playbooks":      d.remEng.IDs(),
-			"privilege_mode": string(d.cfg.PrivilegeMode),
-			"operations_config": map[string]any{
-				"command_run":       true,
-				"command_run_shell": d.cfg.Operations != nil && d.cfg.Operations.AllowShell,
-				"command_run_allowlist": func() any {
-					if d.cfg.Operations == nil {
-						return []string{}
-					}
-					return d.cfg.Operations.Allowlist
-				}(),
-			},
-		},
+		"capabilities":          reportedCapabilities,
 	}
 
 	ctx2, cancel := context.WithTimeout(ctx, 8*time.Second)
@@ -263,6 +361,10 @@ func (d *Daemon) configPollLoop(ctx context.Context) {
 
 			// Operations Platform: pending_action has priority.
 			if rc.PendingAction != nil {
+				if d.migrationRunner != nil || d.migrationActive.Load() {
+					d.logger.Warn("generic pending action rejected by hardened migration profile", "run_id", rc.PendingAction.RunID)
+					goto wait
+				}
 				if err := d.validatePendingAction(rc.PendingAction); err != nil {
 					d.logger.Warn("invalid pending_action", "err", err)
 				} else {
@@ -288,6 +390,10 @@ func (d *Daemon) configPollLoop(ctx context.Context) {
 
 			// UI-driven command support.
 			if rc.PendingCommand.V2 != nil {
+				if d.migrationRunner != nil || d.migrationActive.Load() {
+					d.logger.Warn("generic command deferred by active migration fence", "command_id", rc.PendingCommand.V2.CommandID)
+					goto wait
+				}
 				d.logger.Info("received pending_command_v2",
 					"type", rc.PendingCommand.V2.Type,
 					"command_id", rc.PendingCommand.V2.CommandID,
@@ -303,6 +409,10 @@ func (d *Daemon) configPollLoop(ctx context.Context) {
 			if parseErr != nil {
 				d.logger.Warn("invalid pending_command", "pending_command", rc.PendingCommand.Legacy, "err", parseErr)
 			} else if hasCmd {
+				if d.migrationRunner != nil || d.migrationActive.Load() {
+					d.logger.Warn("legacy command deferred by active migration fence")
+					goto wait
+				}
 				cmdKey := rc.PendingCommand.Legacy + ":" + rc.CommandID
 				if rc.CommandID == "" {
 					// fallback de-dupe: if no command id is provided, use fetched_at.
