@@ -18,7 +18,7 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-const composePolicySchema = "operations.migration.compose-policy.v1"
+const composePolicySchema = "operations.migration.compose-policy.v2"
 
 const composeRuntimeSecretsBindingSchema = "operations.migration.compose-runtime-secrets.v1"
 
@@ -45,30 +45,44 @@ type composeLogging struct {
 }
 
 type composeService struct {
-	Image           string                      `yaml:"image"`
-	User            string                      `yaml:"user"`
-	ReadOnly        bool                        `yaml:"read_only"`
-	Init            bool                        `yaml:"init"`
-	Restart         string                      `yaml:"restart,omitempty"`
-	Environment     map[string]string           `yaml:"environment,omitempty"`
-	DependsOn       map[string]composeDependsOn `yaml:"depends_on,omitempty"`
-	Volumes         []string                    `yaml:"volumes,omitempty"`
-	Ports           []string                    `yaml:"ports,omitempty"`
-	Networks        []string                    `yaml:"networks,omitempty"`
-	Secrets         []string                    `yaml:"secrets,omitempty"`
-	Tmpfs           []string                    `yaml:"tmpfs,omitempty"`
-	CapDrop         []string                    `yaml:"cap_drop"`
-	SecurityOpt     []string                    `yaml:"security_opt"`
-	CPUs            string                      `yaml:"cpus"`
-	MemoryLimit     string                      `yaml:"mem_limit"`
-	PidsLimit       int                         `yaml:"pids_limit"`
-	StopGracePeriod string                      `yaml:"stop_grace_period,omitempty"`
-	Logging         *composeLogging             `yaml:"logging,omitempty"`
+	Image           string                           `yaml:"image"`
+	User            string                           `yaml:"user"`
+	ReadOnly        bool                             `yaml:"read_only"`
+	Init            bool                             `yaml:"init"`
+	Restart         string                           `yaml:"restart,omitempty"`
+	Environment     map[string]string                `yaml:"environment,omitempty"`
+	DependsOn       map[string]composeDependsOn      `yaml:"depends_on,omitempty"`
+	Volumes         []string                         `yaml:"volumes,omitempty"`
+	Ports           []string                         `yaml:"ports,omitempty"`
+	Networks        map[string]composeServiceNetwork `yaml:"networks,omitempty"`
+	Secrets         []string                         `yaml:"secrets,omitempty"`
+	Tmpfs           []string                         `yaml:"tmpfs,omitempty"`
+	CapDrop         []string                         `yaml:"cap_drop"`
+	SecurityOpt     []string                         `yaml:"security_opt"`
+	CPUs            string                           `yaml:"cpus"`
+	MemoryLimit     string                           `yaml:"mem_limit"`
+	PidsLimit       int                              `yaml:"pids_limit"`
+	StopGracePeriod string                           `yaml:"stop_grace_period,omitempty"`
+	Logging         *composeLogging                  `yaml:"logging,omitempty"`
+}
+
+type composeServiceNetwork struct {
+	IPv4Address string `yaml:"ipv4_address"`
+}
+
+type composeIPAMConfig struct {
+	Subnet  string `yaml:"subnet"`
+	Gateway string `yaml:"gateway"`
+}
+
+type composeIPAM struct {
+	Config []composeIPAMConfig `yaml:"config"`
 }
 
 type composeNetwork struct {
-	Driver   string `yaml:"driver,omitempty"`
-	Internal bool   `yaml:"internal"`
+	Driver   string       `yaml:"driver,omitempty"`
+	Internal bool         `yaml:"internal"`
+	IPAM     *composeIPAM `yaml:"ipam"`
 }
 
 type composeVolume struct {
@@ -268,19 +282,73 @@ func validateEnvironment(environment map[string]string, serviceSecrets map[strin
 	return nil
 }
 
+type composeNetworkScope struct {
+	subnet  *net.IPNet
+	gateway net.IP
+}
+
+func parseComposeNetworkScope(network composeNetwork) (composeNetworkScope, error) {
+	if network.IPAM == nil || len(network.IPAM.Config) != 1 {
+		return composeNetworkScope{}, errors.New("Compose isolated networks require exactly one fixed IPv4 IPAM range")
+	}
+	config := network.IPAM.Config[0]
+	parsed, subnet, err := net.ParseCIDR(config.Subnet)
+	if err != nil || parsed.To4() == nil || subnet == nil {
+		return composeNetworkScope{}, errors.New("Compose isolated network subnet is invalid")
+	}
+	ones, bits := subnet.Mask.Size()
+	base := subnet.IP.To4()
+	if bits != 32 || ones != 24 || !parsed.Equal(base) || !base.IsPrivate() || config.Subnet != base.String()+"/24" {
+		return composeNetworkScope{}, errors.New("Compose isolated networks require canonical private IPv4 /24 subnets")
+	}
+	gateway := net.ParseIP(config.Gateway)
+	if gateway == nil || gateway.To4() == nil || gateway.String() != config.Gateway || !subnet.Contains(gateway) {
+		return composeNetworkScope{}, errors.New("Compose isolated network gateway is invalid")
+	}
+	expectedGateway := append(net.IP(nil), base...)
+	expectedGateway[3]++
+	if !gateway.Equal(expectedGateway) {
+		return composeNetworkScope{}, errors.New("Compose isolated network gateway must be the first address in its /24")
+	}
+	return composeNetworkScope{subnet: subnet, gateway: gateway.To4()}, nil
+}
+
+func validateComposeStaticIPv4(value string, scope composeNetworkScope) (string, error) {
+	address := net.ParseIP(value)
+	if address == nil || address.To4() == nil || address.String() != value || !address.IsPrivate() || !scope.subnet.Contains(address) {
+		return "", errors.New("Compose service static IPv4 address is outside its approved private network")
+	}
+	address = address.To4()
+	if address.Equal(scope.subnet.IP) || address.Equal(scope.gateway) || address[3] == 255 {
+		return "", errors.New("Compose service static IPv4 address is reserved")
+	}
+	return address.String(), nil
+}
+
 func validateComposeDocument(document composeDocument) (composePolicyResult, error) {
 	if len(document.Services) == 0 || len(document.Services) > 64 || len(document.Networks) == 0 || len(document.Networks) > 16 || len(document.Volumes) > 64 || len(document.Secrets) > 32 {
 		return composePolicyResult{}, errors.New("Compose document exceeds the supported service/network/volume bounds")
 	}
 	result := composePolicyResult{Document: document, PublishedPorts: []int{}, NamedVolumes: []string{}, NetworkNames: []string{}, BindMountRoots: []string{}, SecretFiles: map[string]string{}}
-	portSet := map[int]struct{}{}
 	usedNetworks := map[string]struct{}{}
 	usedVolumes := map[string]struct{}{}
 	usedSecrets := map[string]struct{}{}
+	networkScopes := map[string]composeNetworkScope{}
+	subnetSet := map[string]struct{}{}
 	for name, network := range document.Networks {
 		if !composeNamePattern.MatchString(name) || !network.Internal || (network.Driver != "" && network.Driver != "bridge") {
 			return composePolicyResult{}, errors.New("Compose networks must be named internal bridge networks")
 		}
+		scope, err := parseComposeNetworkScope(network)
+		if err != nil {
+			return composePolicyResult{}, err
+		}
+		subnet := scope.subnet.String()
+		if _, duplicate := subnetSet[subnet]; duplicate {
+			return composePolicyResult{}, errors.New("Compose isolated network subnet is duplicated")
+		}
+		subnetSet[subnet] = struct{}{}
+		networkScopes[name] = scope
 		result.NetworkNames = append(result.NetworkNames, name)
 	}
 	for name, volume := range document.Volumes {
@@ -295,6 +363,7 @@ func validateComposeDocument(document composeDocument) (composePolicyResult, err
 		}
 		result.SecretFiles[name] = secret.File
 	}
+	staticIPv4Set := map[string]struct{}{}
 	for name, service := range document.Services {
 		if !composeNamePattern.MatchString(name) || !composeImagePattern.MatchString(service.Image) {
 			return composePolicyResult{}, errors.New("Compose services require safe names and digest-pinned images")
@@ -343,12 +412,21 @@ func validateComposeDocument(document composeDocument) (composePolicyResult, err
 			}
 		}
 		if len(service.Networks) == 0 {
-			return composePolicyResult{}, errors.New("Compose services must attach only to declared isolated networks")
+			return composePolicyResult{}, errors.New("Compose services must attach to declared fixed-address isolated networks")
 		}
-		for _, network := range service.Networks {
-			if _, exists := document.Networks[network]; !exists {
+		for network, attachment := range service.Networks {
+			scope, exists := networkScopes[network]
+			if !exists {
 				return composePolicyResult{}, errors.New("Compose service references an unknown network")
 			}
+			address, err := validateComposeStaticIPv4(attachment.IPv4Address, scope)
+			if err != nil {
+				return composePolicyResult{}, err
+			}
+			if _, duplicate := staticIPv4Set[address]; duplicate {
+				return composePolicyResult{}, errors.New("Compose service static IPv4 address is duplicated")
+			}
+			staticIPv4Set[address] = struct{}{}
 			usedNetworks[network] = struct{}{}
 		}
 		for _, volume := range service.Volumes {
@@ -372,16 +450,8 @@ func validateComposeDocument(document composeDocument) (composePolicyResult, err
 				return composePolicyResult{}, errors.New("Compose tmpfs path is unsafe")
 			}
 		}
-		for _, port := range service.Ports {
-			parsed, err := validatePublishedPort(port)
-			if err != nil {
-				return composePolicyResult{}, err
-			}
-			if _, duplicate := portSet[parsed]; duplicate {
-				return composePolicyResult{}, errors.New("Compose host port is duplicated")
-			}
-			portSet[parsed] = struct{}{}
-			result.PublishedPorts = append(result.PublishedPorts, parsed)
+		if len(service.Ports) > 0 {
+			return composePolicyResult{}, errors.New("Compose isolated services cannot declare ignored host port mappings; validate their fixed private IPv4 address")
 		}
 		if service.Logging != nil {
 			if service.Logging.Driver != "json-file" || len(service.Logging.Options) == 0 || len(service.Logging.Options) > 4 || service.Logging.Options["max-size"] == "" || service.Logging.Options["max-file"] == "" {

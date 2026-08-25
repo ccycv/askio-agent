@@ -21,10 +21,9 @@ func validComposeYAML() string {
       APP_MODE: isolated
     volumes:
       - ./data:/srv/data:rw
-    ports:
-      - "127.0.0.1:18080:8080"
     networks:
-      - isolated
+      isolated:
+        ipv4_address: 172.29.250.2
     tmpfs:
       - /tmp
     cap_drop:
@@ -44,6 +43,10 @@ networks:
   isolated:
     driver: bridge
     internal: true
+    ipam:
+      config:
+        - subnet: 172.29.250.0/24
+          gateway: 172.29.250.1
 `
 }
 
@@ -63,7 +66,7 @@ func TestComposePolicyAcceptsOnlyIsolatedBoundedDocument(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(result.Document.Services) != 1 || result.Digest == "" || len(result.PublishedPorts) != 1 || result.PublishedPorts[0] != 18080 {
+	if len(result.Document.Services) != 1 || result.Digest == "" || len(result.PublishedPorts) != 0 {
 		t.Fatalf("unexpected policy result: %+v", result)
 	}
 	if len(result.BindMountRoots) != 1 || result.BindMountRoots[0] != "data" {
@@ -83,6 +86,10 @@ func TestComposePolicyRejectsEscapeFieldsAndUnpinnedImages(t *testing.T) {
 		{name: "absolute mount", from: "./data:/srv/data:rw", to: "/etc:/srv/data:ro"},
 		{name: "unpinned image", from: "registry.example.test/fixture/web@sha256:" + strings.Repeat("a", 64), to: "registry.example.test/fixture/web:latest"},
 		{name: "public network", from: "    internal: true", to: "    internal: false"},
+		{name: "dynamic service address", from: "        ipv4_address: 172.29.250.2", to: "        ipv4_address: \"\""},
+		{name: "public service address", from: "        ipv4_address: 172.29.250.2", to: "        ipv4_address: 203.0.113.2"},
+		{name: "noncanonical subnet", from: "        - subnet: 172.29.250.0/24", to: "        - subnet: 172.29.250.0/16"},
+		{name: "ignored loopback publish", from: "    networks:\n", to: "    ports:\n      - \"127.0.0.1:18080:8080\"\n    networks:\n"},
 	}
 	for _, testCase := range cases {
 		t.Run(testCase.name, func(t *testing.T) {

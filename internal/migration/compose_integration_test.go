@@ -148,7 +148,8 @@ func composeIntegrationDocument(image, project string) map[string]any {
     volumes:
       - ./data:/fixture-data:rw
     networks:
-      - isolated
+      isolated:
+        ipv4_address: 172.29.253.2
     secrets:
       - runtime_credential
     tmpfs:
@@ -171,6 +172,10 @@ networks:
   isolated:
     driver: bridge
     internal: true
+    ipam:
+      config:
+        - subnet: 172.29.253.0/24
+          gateway: 172.29.253.1
 secrets:
   runtime_credential:
     file: /run/askio-monitor/migration-secrets/PROJECT/runtime_credential
