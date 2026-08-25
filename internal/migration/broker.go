@@ -510,8 +510,59 @@ func (b *Broker) releaseWriterFence(ctx context.Context, controller serviceContr
 	b.mu.Lock()
 	fence, found := b.state.WriterFences[request.Task.MigrationID]
 	b.mu.Unlock()
-	if !found || !fence.Active || !equalStrings(fence.Services, services) || fence.Phase == writerFenceReleasing {
+	verifiedAt := time.Now().UTC().Format(time.RFC3339Nano)
+	if !found {
+		// A reviewed recovery may have restored the source outside the agent after
+		// preserving the broker state for incident analysis. Missing ownership is
+		// safe to reconcile only when every scoped writer is already active: this
+		// path records the observed release and never starts an unknown service.
+		if err := verifyExpectedServiceStates(ctx, controller, services, services); err != nil {
+			return nil, errors.New("writer fence ownership or recovered service state is unproven")
+		}
+		released := writerFenceState{
+			MigrationID: request.Task.MigrationID, Services: append([]string{}, services...),
+			PreviouslyActive: append([]string{}, services...), Active: false, Phase: writerFenceReleased,
+			FencingToken: request.Task.FencingToken, LastVerifiedAt: verifiedAt,
+		}
+		b.mu.Lock()
+		b.state.WriterFences[request.Task.MigrationID] = released
+		if err := b.persistFences(); err != nil {
+			delete(b.state.WriterFences, request.Task.MigrationID)
+			b.mu.Unlock()
+			return nil, err
+		}
+		b.mu.Unlock()
+		return map[string]any{
+			"services": services, "action": "start", "writer_fence_active": false,
+			"violation_count": int64(0), "verified_at": verifiedAt,
+			"restarted_services": []string{}, "observed_active_services": append([]string{}, services...),
+			"already_released": true, "recovered_without_fence_record": true,
+		}, nil
+	}
+	if !equalStrings(fence.Services, services) || fence.Phase == writerFenceReleasing {
 		return nil, errors.New("writer fence ownership or service scope is unproven")
+	}
+	if !fence.Active {
+		if fence.Phase != writerFenceReleased || verifyExpectedServiceStates(ctx, controller, services, fence.PreviouslyActive) != nil {
+			return nil, errors.New("released writer fence service state is unproven")
+		}
+		prior := fence
+		fence.FencingToken = request.Task.FencingToken
+		fence.LastVerifiedAt = verifiedAt
+		b.mu.Lock()
+		b.state.WriterFences[request.Task.MigrationID] = fence
+		if err := b.persistFences(); err != nil {
+			b.state.WriterFences[request.Task.MigrationID] = prior
+			b.mu.Unlock()
+			return nil, err
+		}
+		b.mu.Unlock()
+		return map[string]any{
+			"services": services, "action": "start", "writer_fence_active": false,
+			"violation_count": fence.ViolationCount, "verified_at": fence.LastVerifiedAt,
+			"restarted_services": []string{}, "expected_active_services": append([]string{}, fence.PreviouslyActive...),
+			"already_released": true,
+		}, nil
 	}
 	if err := verifyServicesInactive(ctx, controller, services); err != nil {
 		return nil, errors.New("writer fence cannot be released while a scoped service is active")

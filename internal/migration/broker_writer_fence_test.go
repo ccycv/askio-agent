@@ -144,6 +144,49 @@ func TestWriterFenceReleaseRestartsOnlyPreviouslyActiveServices(t *testing.T) {
 	if fence := broker.state.WriterFences[request.Task.MigrationID]; fence.Active || fence.Phase != writerFenceReleased {
 		t.Fatalf("released fence state was not durable: %#v", fence)
 	}
+
+	retry, err := broker.serviceOperation(context.Background(), writerFenceRequest(14), "start")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if retry["already_released"] != true || retry["writer_fence_active"] != false || !controller.active["api.service"] || controller.active["worker.service"] {
+		t.Fatalf("released fence retry was not idempotent: outputs=%#v active=%#v", retry, controller.active)
+	}
+}
+
+func TestWriterFenceReleaseReconcilesReviewedExternalRecovery(t *testing.T) {
+	controller := &fakeServiceController{
+		active:   map[string]bool{"api.service": true, "worker.service": true},
+		failures: map[string]error{},
+		unknown:  map[string]error{},
+	}
+	broker := writerFenceBroker(t, controller)
+	outputs, err := broker.serviceOperation(context.Background(), writerFenceRequest(40), "start")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if outputs["already_released"] != true || outputs["recovered_without_fence_record"] != true || outputs["writer_fence_active"] != false {
+		t.Fatalf("external recovery was not reconciled: %#v", outputs)
+	}
+	fence := broker.state.WriterFences["migration-writer-fence-test"]
+	if fence.Active || fence.Phase != writerFenceReleased || fence.FencingToken != 40 || !equalStrings(fence.PreviouslyActive, []string{"api.service", "worker.service"}) {
+		t.Fatalf("external recovery was not persisted as released: %#v", fence)
+	}
+}
+
+func TestWriterFenceReleaseRejectsAmbiguousMissingFenceState(t *testing.T) {
+	controller := &fakeServiceController{
+		active:   map[string]bool{"api.service": true, "worker.service": false},
+		failures: map[string]error{},
+		unknown:  map[string]error{},
+	}
+	broker := writerFenceBroker(t, controller)
+	if _, err := broker.serviceOperation(context.Background(), writerFenceRequest(41), "start"); err == nil {
+		t.Fatal("ambiguous external recovery was accepted")
+	}
+	if len(broker.state.WriterFences) != 0 || !controller.active["api.service"] || controller.active["worker.service"] {
+		t.Fatalf("ambiguous recovery mutated broker or service state: fences=%#v active=%#v", broker.state.WriterFences, controller.active)
+	}
 }
 
 func TestWriterFenceWatchdogRollsBackCrashDuringRelease(t *testing.T) {
