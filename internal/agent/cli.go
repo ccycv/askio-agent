@@ -66,7 +66,10 @@ func migrationCapabilities() []string {
 
 func newMigrationEnrollmentCmd() *cobra.Command {
 	var registrationToken, keyDir, daemonUser, unitDigest, brokerDigest, packageVersion string
+	var dataPlaneListenAddress string
 	var allowedRoots []string
+	var rootHandleBindings []string
+	var allowedServices []string
 	cmd := &cobra.Command{
 		Use:    "migration-enrollment",
 		Short:  "Generate migration keys and a registration proof",
@@ -78,15 +81,35 @@ func newMigrationEnrollmentCmd() *cobra.Command {
 			if daemonUser == "" || daemonUser == "root" || packageVersion == "" {
 				return fmt.Errorf("a non-root daemon user and package version are required")
 			}
-			if len(allowedRoots) == 0 {
-				allowedRoots = []string{"/srv/askio-migrations", "/var/lib/askio-migrations"}
-			}
-			for _, root := range allowedRoots {
-				if !filepath.IsAbs(root) || filepath.Clean(root) != root || root == "/" {
-					return fmt.Errorf("unsafe migration root %q", root)
+			rootHandles := config.CanonicalMigrationRootHandles()
+			if len(rootHandleBindings) > 0 {
+				rootHandles = map[string]string{}
+				for _, binding := range rootHandleBindings {
+					handle, root, found := strings.Cut(binding, "=")
+					if !found || handle == "" || root == "" {
+						return fmt.Errorf("migration root handles use handle=/absolute/path")
+					}
+					if _, exists := rootHandles[handle]; exists {
+						return fmt.Errorf("duplicate migration root handle %q", handle)
+					}
+					rootHandles[handle] = root
 				}
 			}
-			sort.Strings(allowedRoots)
+			if len(allowedRoots) == 0 {
+				allowedRoots = config.CanonicalMigrationAllowedRoots()
+			}
+			profileConfig, err := (config.Config{
+				Mode: "host", APIURL: "https://enrollment.invalid", ServerID: "enrollment", AgentID: "enrollment",
+				AgentToken: "enrollment", PrivilegeMode: config.PrivilegeModeSudo,
+				Migration: &config.MigrationConfig{
+					Enabled: true, RootHandles: rootHandles, AllowedRoots: allowedRoots,
+					AllowedServices: allowedServices, DataPlaneListenAddress: dataPlaneListenAddress,
+					BackendTaskSigningKeyID: "enrollment", BackendTaskSigningPublicKeyPEMBase64: "enrollment",
+				},
+			}).Normalized()
+			if err != nil {
+				return err
+			}
 			identity, err := migration.LoadOrCreateIdentity(keyDir)
 			if err != nil {
 				return err
@@ -95,7 +118,10 @@ func newMigrationEnrollmentCmd() *cobra.Command {
 				DaemonIsRoot: false, DaemonUser: daemonUser, ShellMode: false, TypedBroker: true,
 				ProtectSystem: "strict", ProtectHome: true, GenericHelperEnabled: false,
 				PackageVersion: packageVersion, UnitDigest: unitDigest, BrokerDigest: brokerDigest,
-				AllowedRoots: allowedRoots,
+				AllowedRoots:           profileConfig.Migration.AllowedRoots,
+				RootHandles:            profileConfig.Migration.RootHandles,
+				AllowedServices:        profileConfig.Migration.AllowedServices,
+				DataPlaneListenAddress: profileConfig.Migration.DataPlaneListenAddress,
 			}
 			enrollment, err := migration.BuildEnrollment(identity, registrationToken, profile, migrationCapabilities())
 			if err != nil {
@@ -113,6 +139,9 @@ func newMigrationEnrollmentCmd() *cobra.Command {
 	cmd.Flags().StringVar(&brokerDigest, "broker-digest", "", "Typed broker binary SHA-256 digest")
 	cmd.Flags().StringVar(&packageVersion, "package-version", version.Version, "Agent package version")
 	cmd.Flags().StringSliceVar(&allowedRoots, "allowed-root", nil, "Fixed migration root (repeatable)")
+	cmd.Flags().StringSliceVar(&rootHandleBindings, "root-handle", nil, "Fixed typed root handle as handle=/absolute/path")
+	cmd.Flags().StringSliceVar(&allowedServices, "allowed-service", nil, "Preconfigured systemd service handle")
+	cmd.Flags().StringVar(&dataPlaneListenAddress, "data-plane-listen", config.DefaultMigrationDataPlaneListenAddress, "Fixed direct-transfer listener")
 	return cmd
 }
 
@@ -354,7 +383,7 @@ func newInstallCmd(logger *slog.Logger, cfgPath *string) *cobra.Command {
 				DataDir:                   config.DefaultDataDir(),
 			}
 			if migrationEnabled {
-				rootHandles := map[string]string{"workspace": "/srv/askio-migrations", "state": "/var/lib/askio-migrations"}
+				rootHandles := config.CanonicalMigrationRootHandles()
 				if len(migrationRootHandles) > 0 {
 					rootHandles = map[string]string{}
 					for _, binding := range migrationRootHandles {
@@ -445,19 +474,19 @@ func newInstallCmd(logger *slog.Logger, cfgPath *string) *cobra.Command {
 				for _, root := range n.Migration.RootHandles {
 					info, statErr := os.Lstat(root)
 					if os.IsNotExist(statErr) {
-						if root != "/srv/askio-migrations" && root != "/var/lib/askio-migrations" {
-							return fmt.Errorf("custom migration root %q must be pre-created with reviewed service-user permissions", root)
-						}
 						if err := os.MkdirAll(root, 0o770); err != nil {
 							return err
 						}
-						if err := os.Chown(root, 0, gid); err != nil {
-							return err
-						}
-						continue
+						info, statErr = os.Lstat(root)
 					}
 					if statErr != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
 						return fmt.Errorf("migration root %q must be an existing non-symlink directory", root)
+					}
+					if err := os.Chown(root, 0, gid); err != nil {
+						return err
+					}
+					if err := os.Chmod(root, 0o770); err != nil {
+						return err
 					}
 				}
 				for _, directory := range []string{n.Migration.KeyDir, n.Migration.StateDir} {
@@ -525,7 +554,7 @@ func newInstallCmd(logger *slog.Logger, cfgPath *string) *cobra.Command {
 	cmd.Flags().StringVar(&migrationKeyDir, "migration-key-dir", "/var/lib/askio-monitor/migration/keys", "Agent-owned migration key directory")
 	cmd.Flags().StringVar(&migrationStateDir, "migration-state-dir", "/var/lib/askio-monitor/migration/state", "Agent-owned durable migration state")
 	cmd.Flags().StringVar(&migrationBrokerSocket, "migration-broker-socket", "/run/askio-migration-broker/broker.sock", "Typed broker Unix socket")
-	cmd.Flags().StringVar(&migrationDataPlaneListen, "migration-data-plane-listen", "", "Optional fixed TCP listen address for direct mTLS migration data transfer")
+	cmd.Flags().StringVar(&migrationDataPlaneListen, "migration-data-plane-listen", config.DefaultMigrationDataPlaneListenAddress, "Fixed TCP listen address for direct mTLS migration data transfer")
 	cmd.Flags().StringVar(&backendSigningKeyID, "migration-backend-key-id", "", "Pinned backend task-signing key ID")
 	cmd.Flags().StringVar(&backendSigningPublicKeyBase64, "migration-backend-public-key-base64", "", "Pinned backend task-signing public PEM, base64 encoded")
 	cmd.Flags().StringSliceVar(&migrationRootHandles, "migration-root-handle", nil, "Fixed typed root handle as handle=/absolute/path")

@@ -35,17 +35,20 @@ type Identity struct {
 }
 
 type SecurityProfile struct {
-	DaemonIsRoot         bool     `json:"daemonIsRoot"`
-	DaemonUser           string   `json:"daemonUser"`
-	ShellMode            bool     `json:"shellMode"`
-	TypedBroker          bool     `json:"typedBroker"`
-	ProtectSystem        string   `json:"protectSystem"`
-	ProtectHome          bool     `json:"protectHome"`
-	GenericHelperEnabled bool     `json:"genericHelperEnabled"`
-	PackageVersion       string   `json:"packageVersion"`
-	UnitDigest           string   `json:"unitDigest"`
-	BrokerDigest         string   `json:"brokerDigest"`
-	AllowedRoots         []string `json:"allowedRoots"`
+	DaemonIsRoot           bool              `json:"daemonIsRoot"`
+	DaemonUser             string            `json:"daemonUser"`
+	ShellMode              bool              `json:"shellMode"`
+	TypedBroker            bool              `json:"typedBroker"`
+	ProtectSystem          string            `json:"protectSystem"`
+	ProtectHome            bool              `json:"protectHome"`
+	GenericHelperEnabled   bool              `json:"genericHelperEnabled"`
+	PackageVersion         string            `json:"packageVersion"`
+	UnitDigest             string            `json:"unitDigest"`
+	BrokerDigest           string            `json:"brokerDigest"`
+	AllowedRoots           []string          `json:"allowedRoots"`
+	RootHandles            map[string]string `json:"rootHandles"`
+	AllowedServices        []string          `json:"allowedServices"`
+	DataPlaneListenAddress string            `json:"dataPlaneListenAddress"`
 }
 
 type Enrollment struct {

@@ -6,6 +6,8 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -18,9 +20,80 @@ var ErrConfigNotFound = errors.New("askio-monitor config not found")
 type PrivilegeMode string
 
 const (
-	PrivilegeModeRoot PrivilegeMode = "root"
-	PrivilegeModeSudo PrivilegeMode = "sudo"
+	PrivilegeModeRoot                      PrivilegeMode = "root"
+	PrivilegeModeSudo                      PrivilegeMode = "sudo"
+	DefaultMigrationDataPlaneListenAddress               = "0.0.0.0:9443"
 )
+
+var migrationServicePattern = regexp.MustCompile(`^[A-Za-z0-9@_.-]+\.service$`)
+
+func CanonicalMigrationRootHandles() map[string]string {
+	return map[string]string{
+		"workspace":        "/srv/askio-migrations",
+		"state":            "/var/lib/askio-migrations",
+		"source-workspace": "/srv/askio-migrations/source-workspace",
+		"source-data":      "/srv/askio-migrations/source-data",
+		"source-staging":   "/var/lib/askio-migrations/source-staging",
+		"target-workspace": "/srv/askio-migrations/target-workspace",
+		"target-data":      "/srv/askio-migrations/target-data",
+		"target-staging":   "/var/lib/askio-migrations/target-staging",
+	}
+}
+
+func CanonicalMigrationAllowedRoots() []string {
+	handles := CanonicalMigrationRootHandles()
+	roots := make([]string, 0, len(handles))
+	for _, root := range handles {
+		roots = append(roots, root)
+	}
+	sort.Strings(roots)
+	return roots
+}
+
+func NormalizeMigrationAllowedServices(services []string) ([]string, error) {
+	if len(services) > 32 {
+		return nil, fmt.Errorf("migration allows at most 32 systemd services")
+	}
+	normalized := append([]string{}, services...)
+	sort.Strings(normalized)
+	for index, service := range normalized {
+		if !migrationServicePattern.MatchString(service) {
+			return nil, fmt.Errorf("invalid migration allowed service %q", service)
+		}
+		if index > 0 && normalized[index-1] == service {
+			return nil, fmt.Errorf("duplicate migration allowed service %q", service)
+		}
+	}
+	return normalized, nil
+}
+
+func migrationRootHandlesAreCanonical(handles map[string]string) bool {
+	expected := CanonicalMigrationRootHandles()
+	if len(handles) != len(expected) {
+		return false
+	}
+	for handle, root := range expected {
+		if handles[handle] != root {
+			return false
+		}
+	}
+	return true
+}
+
+func migrationAllowedRootsAreCanonical(roots []string) bool {
+	expected := CanonicalMigrationAllowedRoots()
+	if len(roots) != len(expected) {
+		return false
+	}
+	actual := append([]string{}, roots...)
+	sort.Strings(actual)
+	for index := range expected {
+		if actual[index] != expected[index] {
+			return false
+		}
+	}
+	return true
+}
 
 type Config struct {
 	Mode                         string        `yaml:"mode"`
@@ -210,6 +283,12 @@ func (c Config) Normalized() (Config, error) {
 		if out.Migration.BrokerSocket == "" {
 			out.Migration.BrokerSocket = "/run/askio-migration-broker/broker.sock"
 		}
+		if out.Migration.DataPlaneListenAddress == "" {
+			out.Migration.DataPlaneListenAddress = DefaultMigrationDataPlaneListenAddress
+		}
+		if out.Migration.DataPlaneListenAddress != DefaultMigrationDataPlaneListenAddress {
+			return Config{}, fmt.Errorf("migration data_plane_listen_address must use the canonical V1 listener")
+		}
 		if out.Migration.DataPlaneListenAddress != "" {
 			host, port, err := net.SplitHostPort(out.Migration.DataPlaneListenAddress)
 			if err != nil || strings.ContainsAny(host, "\x00\r\n\t") {
@@ -221,12 +300,16 @@ func (c Config) Normalized() (Config, error) {
 			}
 		}
 		if len(out.Migration.RootHandles) == 0 {
-			out.Migration.RootHandles = map[string]string{"workspace": "/srv/askio-migrations", "state": "/var/lib/askio-migrations"}
+			out.Migration.RootHandles = CanonicalMigrationRootHandles()
+		}
+		if !migrationRootHandlesAreCanonical(out.Migration.RootHandles) {
+			return Config{}, fmt.Errorf("migration root handles must match the canonical V1 profile")
 		}
 		if len(out.Migration.AllowedRoots) == 0 {
-			for _, root := range out.Migration.RootHandles {
-				out.Migration.AllowedRoots = append(out.Migration.AllowedRoots, root)
-			}
+			out.Migration.AllowedRoots = CanonicalMigrationAllowedRoots()
+		}
+		if !migrationAllowedRootsAreCanonical(out.Migration.AllowedRoots) {
+			return Config{}, fmt.Errorf("migration allowed roots must match the canonical V1 profile")
 		}
 		for _, root := range out.Migration.AllowedRoots {
 			if !filepath.IsAbs(root) || filepath.Clean(root) != root || root == "/" {
@@ -241,6 +324,11 @@ func (c Config) Normalized() (Config, error) {
 				return Config{}, fmt.Errorf("migration root handle %q has an unsafe path", handle)
 			}
 		}
+		normalizedServices, err := NormalizeMigrationAllowedServices(out.Migration.AllowedServices)
+		if err != nil {
+			return Config{}, err
+		}
+		out.Migration.AllowedServices = normalizedServices
 		if out.Migration.BackendTaskSigningKeyID == "" || out.Migration.BackendTaskSigningPublicKeyPEMBase64 == "" {
 			return Config{}, fmt.Errorf("backend migration task-signing key is required")
 		}

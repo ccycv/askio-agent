@@ -82,6 +82,8 @@ func TestIdentityEnrollmentPersistsPrivateKeysAndVerifiesProof(t *testing.T) {
 		DaemonUser: "askio-agent", TypedBroker: true, ProtectSystem: "strict", ProtectHome: true,
 		PackageVersion: "test", UnitDigest: "sha256:" + strings.Repeat("a", 64),
 		BrokerDigest: "sha256:" + strings.Repeat("b", 64), AllowedRoots: []string{"/srv/askio-migrations"},
+		RootHandles:     map[string]string{"workspace": "/srv/askio-migrations"},
+		AllowedServices: []string{"fixture.service"}, DataPlaneListenAddress: "0.0.0.0:9443",
 	}
 	capabilities := []string{"migration.discovery.v1", "migration.security_profile.v1", "migration.task_envelope.v1"}
 	enrollment, err := BuildEnrollment(identity, "registration-token", profile, capabilities)
