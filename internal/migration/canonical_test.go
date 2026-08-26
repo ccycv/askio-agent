@@ -5,6 +5,7 @@ import (
 	"crypto/ed25519"
 	"crypto/rand"
 	"encoding/base64"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -37,6 +38,10 @@ func signedTaskFixture(t *testing.T, private ed25519.PrivateKey) TaskEnvelope {
 		Primitive: PrimitiveRef{ID: "migration.not-implemented.v1", Version: "1.0.0"}, ResourceScope: map[string]any{}, Inputs: inputs,
 		IssuedAt: now.Add(-time.Second).Format(time.RFC3339Nano), ExpiresAt: now.Add(time.Minute).Format(time.RFC3339Nano), Nonce: "signed-task-nonce-test",
 	}
+	runID := "run-test"
+	runStepID := "run-step-test"
+	task.RunID = &runID
+	task.RunStepID = &runStepID
 	canonical, err := CanonicalJSON(envelopeUnsigned(task))
 	if err != nil {
 		t.Fatal(err)
@@ -54,7 +59,7 @@ func TestBrokerRequiresBackendSignedEnvelopeAndRejectsReplay(t *testing.T) {
 	broker := &Broker{
 		config:        BrokerConfig{AgentID: task.AgentID, BackendKeyID: task.KeyID, StatePath: filepath.Join(t.TempDir(), "broker-state.json")},
 		backendPublic: public,
-		state:         brokerPersistentState{SchemaVersion: "operations.migration.broker-state.v1", Fences: map[string]int64{}, SeenNonces: []string{}},
+		state:         brokerPersistentState{SchemaVersion: "operations.migration.broker-state.v1", Fences: map[string]int64{}, SeenNonces: []string{}, SeenNonceExpiries: map[string]string{}},
 	}
 	tampered := task
 	tampered.Inputs = map[string]any{"inputs": map[string]any{"root_handle": "other"}}
@@ -72,11 +77,64 @@ func TestBrokerRequiresBackendSignedEnvelopeAndRejectsReplay(t *testing.T) {
 	}
 }
 
+func TestBrokerDoesNotEvictAStillValidReplayNonce(t *testing.T) {
+	now := time.Now().UTC()
+	expiresAt := now.Add(5 * time.Minute).Format(time.RFC3339Nano)
+	state := brokerPersistentState{
+		SchemaVersion: "operations.migration.broker-state.v1",
+		Fences:        map[string]int64{}, WriterFences: map[string]writerFenceState{},
+		SeenNonceExpiries: map[string]string{"replayed-live-nonce": expiresAt},
+	}
+	for index := 0; index < 600; index++ {
+		state.SeenNonceExpiries[fmt.Sprintf("live-nonce-%03d", index)] = expiresAt
+	}
+	runID := "run-test"
+	runStepID := "run-step-test"
+	task := TaskEnvelope{
+		MigrationID: "migration-test", RunID: &runID, RunStepID: &runStepID,
+		FencingToken: 700, Primitive: PrimitiveRef{ID: "migration.cleanup.staging.v1", Version: "1.0.0"},
+		Nonce: "replayed-live-nonce", ExpiresAt: expiresAt,
+	}
+	broker := &Broker{config: BrokerConfig{StatePath: filepath.Join(t.TempDir(), "broker-state.json")}, state: state}
+	if err := broker.acceptFence(BrokerRequest{Task: task}); err == nil {
+		t.Fatal("still-valid nonce was evicted from broker replay protection")
+	}
+}
+
+func TestRunnerDoesNotEvictAStillValidReplayNonce(t *testing.T) {
+	public, private, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	task := signedTaskFixture(t, private)
+	state := persistentState{
+		SchemaVersion:     "operations.migration.agent-state.v1",
+		SeenNonceExpiries: map[string]string{task.Nonce: task.ExpiresAt},
+	}
+	for index := 0; index < 600; index++ {
+		state.SeenNonceExpiries[fmt.Sprintf("runner-live-nonce-%03d", index)] = task.ExpiresAt
+	}
+	runner := &Runner{
+		agentID: task.AgentID, backendKeyID: task.KeyID, backendPublic: public,
+		executor: inertExecutor{}, state: state,
+	}
+	if _, err := runner.verifyEnvelope(task); err == nil {
+		t.Fatal("still-valid nonce was evicted from runner replay protection")
+	}
+}
+
 func TestIdentityEnrollmentPersistsPrivateKeysAndVerifiesProof(t *testing.T) {
 	directory := t.TempDir()
 	identity, err := LoadOrCreateIdentity(directory)
 	if err != nil {
 		t.Fatal(err)
+	}
+	challengeDigest, err := EnrollmentChallengeDigest(identity)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(challengeDigest, "sha256:") {
+		t.Fatalf("enrollment challenge digest is invalid: %s", challengeDigest)
 	}
 	profile := SecurityProfile{
 		DaemonUser: "askio-agent", TypedBroker: true, ProtectSystem: "strict", ProtectHome: true,
@@ -136,5 +194,23 @@ func TestIdentityEnrollmentPersistsPrivateKeysAndVerifiesProof(t *testing.T) {
 		if info.Mode().Perm() != 0o600 {
 			t.Fatalf("%s mode is %o", name, info.Mode().Perm())
 		}
+	}
+}
+
+func TestEnrollmentChallengeDigestMatchesBackendVector(t *testing.T) {
+	identity := &Identity{
+		SigningKeyID:           "signing-key-vector",
+		SigningPublicKeyPEM:    "-----BEGIN PUBLIC KEY-----\nSIGNING-VECTOR\n-----END PUBLIC KEY-----\n",
+		EncryptionKeyID:        "encryption-key-vector",
+		EncryptionPublicKeyPEM: "-----BEGIN PUBLIC KEY-----\nENCRYPTION-VECTOR\n-----END PUBLIC KEY-----\n",
+		HostIdentityDigest:     "sha256:" + strings.Repeat("c", 64),
+	}
+	digest, err := EnrollmentChallengeDigest(identity)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const expected = "sha256:285a94d57329f0d1acbc86d11823e3bb809f47eb8178e57528451a4e313c5644"
+	if digest != expected {
+		t.Fatalf("challenge vector mismatch: got %s want %s", digest, expected)
 	}
 }

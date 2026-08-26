@@ -51,22 +51,46 @@ func writerFenceBroker(t *testing.T, controller serviceController) *Broker {
 		},
 		serviceControl: controller,
 		state: brokerPersistentState{
-			SchemaVersion: "operations.migration.broker-state.v1",
-			Fences:        map[string]int64{},
-			WriterFences:  map[string]writerFenceState{},
-			SeenNonces:    []string{},
+			SchemaVersion:     "operations.migration.broker-state.v1",
+			Fences:            map[string]int64{},
+			WriterFences:      map[string]writerFenceState{},
+			SeenNonces:        []string{},
+			SeenNonceExpiries: map[string]string{},
 		},
 	}
 }
 
 func writerFenceRequest(token int64) BrokerRequest {
+	runID := "run-writer-fence-test"
+	runStepID := "step-writer-fence-test"
 	return BrokerRequest{Task: TaskEnvelope{
 		MigrationID:  "migration-writer-fence-test",
+		RunID:        &runID,
+		RunStepID:    &runStepID,
 		FencingToken: token,
 		Inputs: map[string]any{
 			"service_handles": []any{"worker.service", "api.service"},
 		},
 	}}
+}
+
+func TestWriterFenceCannotBeReleasedByAnotherRun(t *testing.T) {
+	controller := &fakeServiceController{
+		active: map[string]bool{"api.service": true, "worker.service": true}, failures: map[string]error{}, unknown: map[string]error{},
+	}
+	broker := writerFenceBroker(t, controller)
+	if _, err := broker.serviceOperation(context.Background(), writerFenceRequest(50), "stop"); err != nil {
+		t.Fatal(err)
+	}
+	other := writerFenceRequest(51)
+	otherRunID := "run-attacker-or-stale"
+	other.Task.RunID = &otherRunID
+	if _, err := broker.serviceOperation(context.Background(), other, "start"); err == nil {
+		t.Fatal("a different run released the active writer fence")
+	}
+	if controller.active["api.service"] || controller.active["worker.service"] {
+		t.Fatal("cross-run release changed a fenced service")
+	}
 }
 
 func TestWriterFencePersistsIntentBeforePartialStopFailure(t *testing.T) {
@@ -197,7 +221,7 @@ func TestWriterFenceWatchdogRollsBackCrashDuringRelease(t *testing.T) {
 	}
 	broker := writerFenceBroker(t, controller)
 	broker.state.WriterFences["migration-writer-fence-test"] = writerFenceState{
-		MigrationID: "migration-writer-fence-test", Services: []string{"api.service", "worker.service"},
+		MigrationID: "migration-writer-fence-test", RunID: "run-writer-fence-test", Services: []string{"api.service", "worker.service"},
 		PreviouslyActive: []string{"api.service"}, Active: true, Phase: writerFenceReleasing, FencingToken: 20,
 	}
 
@@ -220,7 +244,7 @@ func TestWriterFenceWatchdogCompletesActivationWithoutInventingViolation(t *test
 	}
 	broker := writerFenceBroker(t, controller)
 	broker.state.WriterFences["migration-writer-fence-test"] = writerFenceState{
-		MigrationID: "migration-writer-fence-test", Services: []string{"api.service", "worker.service"},
+		MigrationID: "migration-writer-fence-test", RunID: "run-writer-fence-test", Services: []string{"api.service", "worker.service"},
 		PreviouslyActive: []string{"api.service", "worker.service"}, Active: true, Phase: writerFenceActivating, FencingToken: 21,
 	}
 

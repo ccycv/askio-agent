@@ -65,6 +65,19 @@ type Enrollment struct {
 	Capabilities           []string        `json:"capabilities"`
 }
 
+// EnrollmentChallenge is the public, host-bound material an operator must
+// authorize before Askio issues a migration registration token. It contains no
+// private key material; the digest binds the token to this exact host identity
+// and key pair before the bearer credential exists.
+type EnrollmentChallenge struct {
+	SchemaVersion          string `json:"schema_version"`
+	SigningKeyID           string `json:"signing_key_id"`
+	SigningPublicKeyPEM    string `json:"signing_public_key_pem"`
+	EncryptionKeyID        string `json:"encryption_key_id"`
+	EncryptionPublicKeyPEM string `json:"encryption_public_key_pem"`
+	HostIdentityDigest     string `json:"host_identity_digest"`
+}
+
 func ensureDirectory(path string) error {
 	if !filepath.IsAbs(path) {
 		return fmt.Errorf("key directory must be absolute")
@@ -238,6 +251,29 @@ func LoadOrCreateIdentity(dir string) (*Identity, error) {
 		EncryptionKeyID: encryptionID, EncryptionPrivateKey: encryptionPrivate, EncryptionPublicKeyPEM: encryptionPublic,
 		HostIdentityDigest: hostDigest,
 	}, nil
+}
+
+func BuildEnrollmentChallenge(identity *Identity) (EnrollmentChallenge, error) {
+	if identity == nil || identity.SigningKeyID == "" || identity.SigningPublicKeyPEM == "" ||
+		identity.EncryptionKeyID == "" || identity.EncryptionPublicKeyPEM == "" || identity.HostIdentityDigest == "" {
+		return EnrollmentChallenge{}, errors.New("migration enrollment identity is incomplete")
+	}
+	return EnrollmentChallenge{
+		SchemaVersion:          "operations.migration.enrollment-challenge.v1",
+		SigningKeyID:           identity.SigningKeyID,
+		SigningPublicKeyPEM:    identity.SigningPublicKeyPEM,
+		EncryptionKeyID:        identity.EncryptionKeyID,
+		EncryptionPublicKeyPEM: identity.EncryptionPublicKeyPEM,
+		HostIdentityDigest:     identity.HostIdentityDigest,
+	}, nil
+}
+
+func EnrollmentChallengeDigest(identity *Identity) (string, error) {
+	challenge, err := BuildEnrollmentChallenge(identity)
+	if err != nil {
+		return "", err
+	}
+	return Digest(challenge)
 }
 
 func BuildEnrollment(identity *Identity, registrationToken string, profile SecurityProfile, capabilities []string) (Enrollment, error) {

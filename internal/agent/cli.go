@@ -45,10 +45,34 @@ func NewCLI(opts CLIOptions) *cobra.Command {
 	root.AddCommand(newRemediateCmd(opts.Logger, &cfgPath))
 	root.AddCommand(newStatusCmd(opts.Logger, &cfgPath))
 	root.AddCommand(newInstallCmd(opts.Logger, &cfgPath))
+	root.AddCommand(newMigrationEnrollmentChallengeCmd())
 	root.AddCommand(newMigrationEnrollmentCmd())
 	root.AddCommand(newMigrationBrokerCmd(&cfgPath))
 
 	return root
+}
+
+func newMigrationEnrollmentChallengeCmd() *cobra.Command {
+	var keyDir string
+	cmd := &cobra.Command{
+		Use:    "migration-enrollment-challenge",
+		Short:  "Prepare the host-bound migration enrollment challenge",
+		Hidden: true,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			identity, err := migration.LoadOrCreateIdentity(keyDir)
+			if err != nil {
+				return err
+			}
+			digest, err := migration.EnrollmentChallengeDigest(identity)
+			if err != nil {
+				return err
+			}
+			_, err = fmt.Fprintln(os.Stdout, digest)
+			return err
+		},
+	}
+	cmd.Flags().StringVar(&keyDir, "key-dir", "/var/lib/askio-monitor/migration/keys", "Root for agent-owned migration keys")
+	return cmd
 }
 
 var digestPattern = regexp.MustCompile(`^sha256:[a-f0-9]{64}$`)

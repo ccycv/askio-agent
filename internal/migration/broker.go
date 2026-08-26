@@ -64,14 +64,16 @@ type BrokerConfig struct {
 }
 
 type brokerPersistentState struct {
-	SchemaVersion string                      `json:"schema_version"`
-	Fences        map[string]int64            `json:"fences"`
-	WriterFences  map[string]writerFenceState `json:"writer_fences,omitempty"`
-	SeenNonces    []string                    `json:"seen_nonces"`
+	SchemaVersion     string                      `json:"schema_version"`
+	Fences            map[string]int64            `json:"fences"`
+	WriterFences      map[string]writerFenceState `json:"writer_fences,omitempty"`
+	SeenNonces        []string                    `json:"seen_nonces,omitempty"`
+	SeenNonceExpiries map[string]string           `json:"seen_nonce_expiries,omitempty"`
 }
 
 type writerFenceState struct {
 	MigrationID      string   `json:"migration_id"`
+	RunID            string   `json:"run_id"`
 	Services         []string `json:"services"`
 	PreviouslyActive []string `json:"previously_active_services,omitempty"`
 	Active           bool     `json:"active"`
@@ -185,7 +187,7 @@ func NewBroker(config BrokerConfig) (*Broker, error) {
 		config: config, resolver: resolver, allowedUID: uid, allowedGID: gid, allowedServices: allowed, backendPublic: backendPublic,
 		state: brokerPersistentState{
 			SchemaVersion: "operations.migration.broker-state.v1", Fences: map[string]int64{},
-			WriterFences: map[string]writerFenceState{}, SeenNonces: []string{},
+			WriterFences: map[string]writerFenceState{}, SeenNonces: []string{}, SeenNonceExpiries: map[string]string{},
 		},
 	}
 	if err := broker.loadFences(); err != nil {
@@ -210,6 +212,9 @@ func (b *Broker) loadFences() error {
 	}
 	if b.state.WriterFences == nil {
 		b.state.WriterFences = map[string]writerFenceState{}
+	}
+	if b.state.SeenNonceExpiries == nil {
+		b.state.SeenNonceExpiries = map[string]string{}
 	}
 	for migrationID, fence := range b.state.WriterFences {
 		if fence.Phase == "" {
@@ -281,10 +286,27 @@ func (b *Broker) acceptFence(request BrokerRequest) error {
 	key := task.MigrationID + ":" + brokerFenceDomain(task.Primitive.ID)
 	b.mu.Lock()
 	defer b.mu.Unlock()
+	now := time.Now().UTC()
+	if b.state.SeenNonceExpiries == nil {
+		b.state.SeenNonceExpiries = map[string]string{}
+	}
 	for _, nonce := range b.state.SeenNonces {
 		if nonce == task.Nonce {
 			return errors.New("broker task envelope was already consumed")
 		}
+	}
+	for nonce, expiry := range b.state.SeenNonceExpiries {
+		expiresAt, parseErr := time.Parse(time.RFC3339Nano, expiry)
+		if parseErr == nil && !expiresAt.After(now) {
+			delete(b.state.SeenNonceExpiries, nonce)
+		}
+	}
+	if _, consumed := b.state.SeenNonceExpiries[task.Nonce]; consumed {
+		return errors.New("broker task envelope was already consumed")
+	}
+	expiresAt, err := time.Parse(time.RFC3339Nano, task.ExpiresAt)
+	if err != nil || !expiresAt.After(now) {
+		return errors.New("broker task envelope expiry is invalid")
 	}
 	if prior := b.state.Fences[key]; prior > task.FencingToken {
 		return errors.New("stale broker fencing token")
@@ -292,14 +314,18 @@ func (b *Broker) acceptFence(request BrokerRequest) error {
 	if b.state.Fences[key] < task.FencingToken {
 		b.state.Fences[key] = task.FencingToken
 	}
-	b.state.SeenNonces = append(b.state.SeenNonces, task.Nonce)
-	if len(b.state.SeenNonces) > 512 {
-		b.state.SeenNonces = append([]string{}, b.state.SeenNonces[len(b.state.SeenNonces)-512:]...)
-	}
+	b.state.SeenNonceExpiries[task.Nonce] = expiresAt.Format(time.RFC3339Nano)
 	if err := b.persistFences(); err != nil {
 		return err
 	}
 	return nil
+}
+
+func brokerTaskRunID(task TaskEnvelope) (string, error) {
+	if task.RunID == nil || *task.RunID == "" || task.RunStepID == nil || *task.RunStepID == "" {
+		return "", errors.New("privileged task run scope is required")
+	}
+	return *task.RunID, nil
 }
 
 func brokerFenceDomain(primitiveID string) string {
@@ -430,10 +456,14 @@ func (b *Broker) serviceOperation(ctx context.Context, request BrokerRequest, ac
 }
 
 func (b *Broker) activateWriterFence(ctx context.Context, controller serviceController, request BrokerRequest, services []string) (map[string]any, error) {
+	runID, err := brokerTaskRunID(request.Task)
+	if err != nil {
+		return nil, err
+	}
 	b.mu.Lock()
 	prior, found := b.state.WriterFences[request.Task.MigrationID]
 	b.mu.Unlock()
-	if found && prior.Active && !equalStrings(prior.Services, services) {
+	if found && prior.Active && (prior.RunID != runID || !equalStrings(prior.Services, services)) {
 		return nil, errors.New("writer fence ownership or service scope is unproven")
 	}
 
@@ -446,6 +476,7 @@ func (b *Broker) activateWriterFence(ctx context.Context, controller serviceCont
 	}
 	intent := prior
 	intent.MigrationID = request.Task.MigrationID
+	intent.RunID = runID
 	intent.Services = append([]string{}, services...)
 	intent.PreviouslyActive = previouslyActive
 	intent.Active = true
@@ -507,6 +538,10 @@ func (b *Broker) activateWriterFence(ctx context.Context, controller serviceCont
 }
 
 func (b *Broker) releaseWriterFence(ctx context.Context, controller serviceController, request BrokerRequest, services []string) (map[string]any, error) {
+	runID, err := brokerTaskRunID(request.Task)
+	if err != nil {
+		return nil, err
+	}
 	b.mu.Lock()
 	fence, found := b.state.WriterFences[request.Task.MigrationID]
 	b.mu.Unlock()
@@ -520,7 +555,7 @@ func (b *Broker) releaseWriterFence(ctx context.Context, controller serviceContr
 			return nil, errors.New("writer fence ownership or recovered service state is unproven")
 		}
 		released := writerFenceState{
-			MigrationID: request.Task.MigrationID, Services: append([]string{}, services...),
+			MigrationID: request.Task.MigrationID, RunID: runID, Services: append([]string{}, services...),
 			PreviouslyActive: append([]string{}, services...), Active: false, Phase: writerFenceReleased,
 			FencingToken: request.Task.FencingToken, LastVerifiedAt: verifiedAt,
 		}
@@ -539,7 +574,7 @@ func (b *Broker) releaseWriterFence(ctx context.Context, controller serviceContr
 			"already_released": true, "recovered_without_fence_record": true,
 		}, nil
 	}
-	if !equalStrings(fence.Services, services) || fence.Phase == writerFenceReleasing {
+	if fence.RunID != runID || !equalStrings(fence.Services, services) || fence.Phase == writerFenceReleasing {
 		return nil, errors.New("writer fence ownership or service scope is unproven")
 	}
 	if !fence.Active {
@@ -690,6 +725,10 @@ func verifyServicesInactive(ctx context.Context, controller serviceController, s
 }
 
 func (b *Broker) verifyWriterFence(ctx context.Context, request BrokerRequest) (map[string]any, error) {
+	runID, err := brokerTaskRunID(request.Task)
+	if err != nil {
+		return nil, err
+	}
 	services, err := stringListInput(taskInputs(request.Task), "service_handles", 32)
 	if err != nil {
 		return nil, err
@@ -737,7 +776,7 @@ func (b *Broker) verifyWriterFence(ctx context.Context, request BrokerRequest) (
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	fence, found := b.state.WriterFences[request.Task.MigrationID]
-	if !found || !fence.Active || fence.Phase == writerFenceReleasing || !equalStrings(fence.Services, services) {
+	if !found || fence.RunID != runID || !fence.Active || fence.Phase == writerFenceReleasing || !equalStrings(fence.Services, services) {
 		return nil, errors.New("active writer fence scope is unproven")
 	}
 	if fence.Phase == writerFenceActivating {
@@ -1120,6 +1159,9 @@ func (b *Broker) execute(ctx context.Context, request BrokerRequest) BrokerRespo
 	}
 	if _, err := verifySignedTaskEnvelope(task, b.config.BackendKeyID, b.config.AgentID, b.backendPublic); err != nil {
 		return BrokerResponse{OK: false, Error: &SafeError{Code: "MIGRATION_BROKER_TASK_UNAUTHORIZED", SafeMessage: "The backend-signed task envelope is invalid or expired."}}
+	}
+	if _, err := brokerTaskRunID(task); err != nil {
+		return BrokerResponse{OK: false, Error: &SafeError{Code: "MIGRATION_BROKER_TASK_UNAUTHORIZED", SafeMessage: "The backend-signed task envelope is missing its privileged run scope."}}
 	}
 	if err := b.acceptFence(request); err != nil {
 		return BrokerResponse{OK: false, Error: &SafeError{Code: "MIGRATION_BROKER_FENCED", SafeMessage: "The privileged operation was rejected by its fencing token."}}

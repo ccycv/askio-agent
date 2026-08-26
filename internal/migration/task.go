@@ -124,15 +124,16 @@ type sealedSecretResponse struct {
 }
 
 type persistentState struct {
-	SchemaVersion     string         `json:"schema_version"`
-	AcceptedDigest    string         `json:"accepted_envelope_digest,omitempty"`
-	ActiveAttemptID   string         `json:"active_attempt_id,omitempty"`
-	ActivePrimitive   string         `json:"active_primitive,omitempty"`
-	CurrentPhase      string         `json:"current_phase,omitempty"`
-	ProgressSequence  int64          `json:"progress_sequence,omitempty"`
-	PendingRoute      string         `json:"pending_route,omitempty"`
-	PendingResultBody map[string]any `json:"pending_result_body,omitempty"`
-	SeenNonces        []string       `json:"seen_nonces,omitempty"`
+	SchemaVersion     string            `json:"schema_version"`
+	AcceptedDigest    string            `json:"accepted_envelope_digest,omitempty"`
+	ActiveAttemptID   string            `json:"active_attempt_id,omitempty"`
+	ActivePrimitive   string            `json:"active_primitive,omitempty"`
+	CurrentPhase      string            `json:"current_phase,omitempty"`
+	ProgressSequence  int64             `json:"progress_sequence,omitempty"`
+	PendingRoute      string            `json:"pending_route,omitempty"`
+	PendingResultBody map[string]any    `json:"pending_result_body,omitempty"`
+	SeenNonces        []string          `json:"seen_nonces,omitempty"`
+	SeenNonceExpiries map[string]string `json:"seen_nonce_expiries,omitempty"`
 }
 
 type Runner struct {
@@ -194,7 +195,10 @@ func NewRunner(client *api.Client, agentID string, identity *Identity, backendKe
 	runner := &Runner{
 		client: client, agentID: agentID, identity: identity, backendKeyID: backendKeyID,
 		backendPublic: backendPublic, statePath: filepath.Join(stateDir, "task-state.json"), executor: executor,
-		state: persistentState{SchemaVersion: "operations.migration.agent-state.v1", SeenNonces: []string{}},
+		state: persistentState{
+			SchemaVersion: "operations.migration.agent-state.v1",
+			SeenNonces:    []string{}, SeenNonceExpiries: map[string]string{},
+		},
 	}
 	if aware, ok := executor.(bindingAwareExecutor); ok {
 		aware.SetBindingResolver(runner.resolveBinding)
@@ -407,6 +411,9 @@ func (r *Runner) loadState() error {
 	if r.state.SchemaVersion != "operations.migration.agent-state.v1" {
 		return errors.New("unsupported migration task state schema")
 	}
+	if r.state.SeenNonceExpiries == nil {
+		r.state.SeenNonceExpiries = map[string]string{}
+	}
 	return nil
 }
 
@@ -530,6 +537,16 @@ func (r *Runner) verifyEnvelope(task TaskEnvelope) (string, error) {
 			return "", errors.New("task envelope nonce was already accepted")
 		}
 	}
+	now := time.Now().UTC()
+	for nonce, expiry := range r.state.SeenNonceExpiries {
+		expiresAt, parseErr := time.Parse(time.RFC3339Nano, expiry)
+		if parseErr == nil && expiresAt.Before(now) {
+			delete(r.state.SeenNonceExpiries, nonce)
+		}
+	}
+	if _, seen := r.state.SeenNonceExpiries[task.Nonce]; seen {
+		return "", errors.New("task envelope nonce was already accepted")
+	}
 	return digest, nil
 }
 
@@ -649,10 +666,10 @@ func (r *Runner) RunOnce(ctx context.Context) (bool, error) {
 	r.state.ActivePrimitive = task.Primitive.ID
 	r.state.CurrentPhase = "accepted"
 	r.state.ProgressSequence = 0
-	r.state.SeenNonces = append(r.state.SeenNonces, task.Nonce)
-	if len(r.state.SeenNonces) > 256 {
-		r.state.SeenNonces = append([]string{}, r.state.SeenNonces[len(r.state.SeenNonces)-256:]...)
+	if r.state.SeenNonceExpiries == nil {
+		r.state.SeenNonceExpiries = map[string]string{}
 	}
+	r.state.SeenNonceExpiries[task.Nonce] = task.ExpiresAt
 	if err := r.saveState(); err != nil {
 		return true, err
 	}
