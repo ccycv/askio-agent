@@ -177,3 +177,32 @@ func TestComposeRuntimeBindingPurposeIsLimitedToTargetStart(t *testing.T) {
 		t.Fatalf("Compose stop unexpectedly received runtime secret purpose %q", purpose)
 	}
 }
+
+func TestDatabaseBindingPurposesFollowTypedEngineAndEndpoint(t *testing.T) {
+	bindingID := "55555555-5555-4555-8555-555555555555"
+	for _, test := range []struct {
+		primitive string
+		engine    string
+		role      string
+		want      string
+	}{
+		{"migration.mysql.dump.v1", "", "source", "mysql.source"},
+		{"migration.mysql.restore.v1", "", "target", "mysql.target"},
+		{"migration.mongodb.inspect.v1", "", "source", "mongodb.source"},
+		{"migration.mongodb.verify.v1", "", "target", "mongodb.target"},
+		{"migration.source.estimate.v1", "mariadb", "source", "mysql.source"},
+		{"migration.source.verify-quiescence.v1", "mongodb", "source", "mongodb.source"},
+	} {
+		inputs := map[string]any{"database_binding_id": bindingID}
+		if test.engine != "" {
+			inputs["database_engine"] = test.engine
+		}
+		task := TaskEnvelope{
+			Primitive: PrimitiveRef{ID: test.primitive, Version: "1.0.0"},
+			Inputs:    map[string]any{"endpoint_role": test.role, "inputs": inputs},
+		}
+		if got := expectedBindingPurpose(task, bindingID); got != test.want {
+			t.Fatalf("%s %s purpose = %q, want %q", test.primitive, test.role, got, test.want)
+		}
+	}
+}

@@ -84,7 +84,8 @@ func migrationCapabilities() []string {
 		"migration.checkpoint_resume.v1", "migration.validation.v1", "migration.evidence.v1",
 		"migration.cleanup.v1", "migration.maintenance.v1",
 		"migration.files_sync.v1", "migration.direct_mtls_chunks.v1",
-		"migration.postgres_offline.v1", "migration.compose_isolation.v1", "migration.quiescence.v1",
+		"migration.postgres_offline.v1", "migration.mysql_offline.v1", "migration.mongodb_offline.v1",
+		"migration.compose_isolation.v1", "migration.quiescence.v1",
 	}
 }
 

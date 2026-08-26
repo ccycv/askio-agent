@@ -27,6 +27,12 @@ var supportedPrimitives = map[string]struct{}{
 	"migration.postgres.inspect.v1": {}, "migration.postgres.dump.v1": {},
 	"migration.postgres.reset-empty-target.v1": {}, "migration.postgres.restore.v1": {},
 	"migration.postgres.verify.v1": {}, "migration.compose.inspect.v1": {},
+	"migration.mysql.inspect.v1": {}, "migration.mysql.dump.v1": {},
+	"migration.mysql.reset-empty-target.v1": {}, "migration.mysql.restore.v1": {},
+	"migration.mysql.verify.v1":    {},
+	"migration.mongodb.inspect.v1": {}, "migration.mongodb.dump.v1": {},
+	"migration.mongodb.reset-empty-target.v1": {}, "migration.mongodb.restore.v1": {},
+	"migration.mongodb.verify.v1":           {},
 	"migration.compose.preflight-target.v1": {},
 	"migration.compose.render.v1":           {}, "migration.compose.start-isolated.v1": {},
 	"migration.compose.stop.v1":     {},
@@ -375,6 +381,26 @@ func (e *NativeExecutor) Execute(ctx context.Context, task TaskEnvelope, progres
 		outputs, err = e.postgresRestore(ctx, task, inputs, progress)
 	case "migration.postgres.verify.v1":
 		outputs, err = e.postgresVerify(ctx, task, inputs)
+	case "migration.mysql.inspect.v1":
+		outputs, err = e.mysqlInspect(ctx, task, inputs)
+	case "migration.mysql.dump.v1":
+		outputs, err = e.mysqlDump(ctx, task, inputs, progress)
+	case "migration.mysql.reset-empty-target.v1":
+		outputs, err = e.mysqlReset(ctx, task, inputs)
+	case "migration.mysql.restore.v1":
+		outputs, err = e.mysqlRestore(ctx, task, inputs, progress)
+	case "migration.mysql.verify.v1":
+		outputs, err = e.mysqlVerify(ctx, task, inputs)
+	case "migration.mongodb.inspect.v1":
+		outputs, err = e.mongodbInspect(ctx, task, inputs)
+	case "migration.mongodb.dump.v1":
+		outputs, err = e.mongodbDump(ctx, task, inputs, progress)
+	case "migration.mongodb.reset-empty-target.v1":
+		outputs, err = e.mongodbReset(ctx, task, inputs)
+	case "migration.mongodb.restore.v1":
+		outputs, err = e.mongodbRestore(ctx, task, inputs, progress)
+	case "migration.mongodb.verify.v1":
+		outputs, err = e.mongodbVerify(ctx, task, inputs)
 	case "migration.files.sync.v1":
 		outputs, err = e.filesSync(ctx, task, inputs, progress)
 	default:

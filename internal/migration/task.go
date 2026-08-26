@@ -291,22 +291,37 @@ func expectedBindingPurpose(task TaskEnvelope, bindingID string) string {
 	if value, _ := inputs["database_binding_id"].(string); value != bindingID {
 		return ""
 	}
-	switch task.Primitive.ID {
-	case "migration.postgres.dump.v1", "migration.source.estimate.v1", "migration.source.verify-quiescence.v1":
-		if endpointRole == "source" {
-			return "postgres.source"
+	family := ""
+	switch {
+	case strings.HasPrefix(task.Primitive.ID, "migration.postgres."):
+		family = "postgres"
+	case strings.HasPrefix(task.Primitive.ID, "migration.mysql."):
+		family = "mysql"
+	case strings.HasPrefix(task.Primitive.ID, "migration.mongodb."):
+		family = "mongodb"
+	case task.Primitive.ID == "migration.source.estimate.v1" || task.Primitive.ID == "migration.source.verify-quiescence.v1":
+		engine, _ := inputs["database_engine"].(string)
+		switch engine {
+		case "postgresql":
+			family = "postgres"
+		case "mysql", "mariadb":
+			family = "mysql"
+		case "mongodb":
+			family = "mongodb"
 		}
-	case "migration.postgres.reset-empty-target.v1", "migration.postgres.restore.v1", "migration.postgres.verify.v1":
-		if endpointRole == "target" {
-			return "postgres.target"
-		}
-	case "migration.postgres.inspect.v1":
-		if endpointRole == "source" {
-			return "postgres.source"
-		}
-		if endpointRole == "target" {
-			return "postgres.target"
-		}
+	}
+	if family == "" {
+		return ""
+	}
+	sourcePrimitive := strings.HasSuffix(task.Primitive.ID, ".inspect.v1") || strings.HasSuffix(task.Primitive.ID, ".dump.v1") ||
+		task.Primitive.ID == "migration.source.estimate.v1" || task.Primitive.ID == "migration.source.verify-quiescence.v1"
+	targetPrimitive := strings.HasSuffix(task.Primitive.ID, ".inspect.v1") || strings.HasSuffix(task.Primitive.ID, ".reset-empty-target.v1") ||
+		strings.HasSuffix(task.Primitive.ID, ".restore.v1") || strings.HasSuffix(task.Primitive.ID, ".verify.v1")
+	if endpointRole == "source" && sourcePrimitive {
+		return family + ".source"
+	}
+	if endpointRole == "target" && targetPrimitive {
+		return family + ".target"
 	}
 	return ""
 }

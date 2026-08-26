@@ -12,6 +12,94 @@ type brokerVerificationResult struct {
 	err      error
 }
 
+type sourceDatabaseObservation struct {
+	ManifestDigest string
+	DatabaseBytes  int64
+}
+
+type sourceDatabaseObserver struct {
+	engine  string
+	inspect func(context.Context) (sourceDatabaseObservation, error)
+	close   func()
+}
+
+func (e *NativeExecutor) newSourceDatabaseObserver(ctx context.Context, task TaskEnvelope, inputs map[string]any) (sourceDatabaseObserver, error) {
+	engine, err := stringInput(inputs, "database_engine")
+	if err != nil {
+		return sourceDatabaseObserver{}, err
+	}
+	switch engine {
+	case "postgresql":
+		bindingID, binding, err := e.resolvePostgresBinding(ctx, task, inputs)
+		if err != nil {
+			return sourceDatabaseObserver{}, err
+		}
+		if binding.Mode != "source" {
+			binding.clear()
+			return sourceDatabaseObserver{}, errors.New("source observation requires a source PostgreSQL binding")
+		}
+		return sourceDatabaseObserver{
+			engine: engine, close: binding.clear,
+			inspect: func(sampleContext context.Context) (sourceDatabaseObservation, error) {
+				inspection, inspectErr := e.inspectPostgres(sampleContext, bindingID, binding)
+				if inspectErr != nil {
+					return sourceDatabaseObservation{}, inspectErr
+				}
+				if !inspection.Exists || inspection.NonDefaultTablespaceCount > 0 {
+					return sourceDatabaseObservation{}, errors.New("source PostgreSQL database is missing or unsupported")
+				}
+				return sourceDatabaseObservation{ManifestDigest: inspection.ManifestDigest, DatabaseBytes: inspection.DatabaseBytes}, nil
+			},
+		}, nil
+	case "mysql", "mariadb":
+		bindingID, binding, err := e.resolveMySQLBinding(ctx, task, inputs)
+		if err != nil {
+			return sourceDatabaseObserver{}, err
+		}
+		if binding.Mode != "source" || binding.Engine != engine {
+			binding.clear()
+			return sourceDatabaseObserver{}, errors.New("source observation database engine does not match its binding")
+		}
+		return sourceDatabaseObserver{
+			engine: engine, close: binding.clear,
+			inspect: func(sampleContext context.Context) (sourceDatabaseObservation, error) {
+				inspection, inspectErr := e.inspectMySQL(sampleContext, bindingID, binding)
+				if inspectErr != nil {
+					return sourceDatabaseObservation{}, inspectErr
+				}
+				if !inspection.Exists {
+					return sourceDatabaseObservation{}, errors.New("source MySQL or MariaDB database is missing")
+				}
+				return sourceDatabaseObservation{ManifestDigest: inspection.ManifestDigest, DatabaseBytes: inspection.DatabaseBytes}, nil
+			},
+		}, nil
+	case "mongodb":
+		bindingID, binding, err := e.resolveMongoDBBinding(ctx, task, inputs)
+		if err != nil {
+			return sourceDatabaseObserver{}, err
+		}
+		if binding.Mode != "source" {
+			binding.clear()
+			return sourceDatabaseObserver{}, errors.New("source observation requires a source MongoDB binding")
+		}
+		return sourceDatabaseObserver{
+			engine: engine, close: binding.clear,
+			inspect: func(sampleContext context.Context) (sourceDatabaseObservation, error) {
+				inspection, inspectErr := e.inspectMongoDB(sampleContext, bindingID, binding)
+				if inspectErr != nil {
+					return sourceDatabaseObservation{}, inspectErr
+				}
+				if !inspection.Exists {
+					return sourceDatabaseObservation{}, errors.New("source MongoDB database has no supported collections")
+				}
+				return sourceDatabaseObservation{ManifestDigest: inspection.ManifestDigest, DatabaseBytes: inspection.DatabaseBytes}, nil
+			},
+		}, nil
+	default:
+		return sourceDatabaseObserver{}, errors.New("source observation database engine is unsupported")
+	}
+}
+
 func optionalDigestInput(inputs map[string]any, key string) (string, error) {
 	raw, present := inputs[key]
 	if !present {
@@ -30,20 +118,14 @@ func (e *NativeExecutor) sourceEstimate(
 	inputs map[string]any,
 	progress func(string, int64, *int64) error,
 ) (map[string]any, error) {
-	bindingID, binding, err := e.resolvePostgresBinding(ctx, task, inputs)
+	observer, err := e.newSourceDatabaseObserver(ctx, task, inputs)
 	if err != nil {
 		return nil, err
 	}
-	defer binding.clear()
-	if binding.Mode != "source" {
-		return nil, errors.New("cutover estimation requires a source database binding")
-	}
-	inspection, err := e.inspectPostgres(ctx, bindingID, binding)
+	defer observer.close()
+	inspection, err := observer.inspect(ctx)
 	if err != nil {
 		return nil, err
-	}
-	if !inspection.Exists || inspection.NonDefaultTablespaceCount > 0 {
-		return nil, errors.New("source database is missing or uses unsupported tablespaces")
 	}
 	handle, err := stringInput(inputs, "root_handle")
 	if err != nil {
@@ -75,6 +157,7 @@ func (e *NativeExecutor) sourceEstimate(
 	observedAt := time.Now().UTC().Format(time.RFC3339Nano)
 	proof := map[string]any{
 		"schema_version":             "operations.migration.cutover-estimate.v1",
+		"database_engine":            observer.engine,
 		"database_manifest_digest":   inspection.ManifestDigest,
 		"database_bytes":             inspection.DatabaseBytes,
 		"file_manifest_digest":       files.Digest,
@@ -111,14 +194,11 @@ func (e *NativeExecutor) sourceQuiescence(
 	if err != nil {
 		return nil, err
 	}
-	bindingID, binding, err := e.resolvePostgresBinding(ctx, task, inputs)
+	observer, err := e.newSourceDatabaseObserver(ctx, task, inputs)
 	if err != nil {
 		return nil, err
 	}
-	defer binding.clear()
-	if binding.Mode != "source" {
-		return nil, errors.New("quiescence verification requires a source database binding")
-	}
+	defer observer.close()
 	handle, err := stringInput(inputs, "root_handle")
 	if err != nil {
 		return nil, err
@@ -145,7 +225,7 @@ func (e *NativeExecutor) sourceQuiescence(
 		brokerResult <- brokerVerificationResult{response: response, err: executeErr}
 	}()
 
-	beforeDatabase, err := e.inspectPostgres(ctx, bindingID, binding)
+	beforeDatabase, err := observer.inspect(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -168,7 +248,7 @@ func (e *NativeExecutor) sourceQuiescence(
 	if err := progress("quiescence_second_sample", 0, nil); err != nil {
 		return nil, err
 	}
-	afterDatabase, err := e.inspectPostgres(ctx, bindingID, binding)
+	afterDatabase, err := observer.inspect(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -205,6 +285,7 @@ func (e *NativeExecutor) sourceQuiescence(
 	observedAt := time.Now().UTC().Format(time.RFC3339Nano)
 	proof := map[string]any{
 		"schema_version":               "operations.migration.source-quiescence.v1",
+		"database_engine":              observer.engine,
 		"writer_fence_active":          true,
 		"writer_fence_verified_at":     verification.response.Outputs["verified_at"],
 		"writer_fence_activated_at":    verification.response.Outputs["activated_at"],
