@@ -25,3 +25,21 @@ func TestDockerClientVersionDoesNotRequireDaemonAccess(t *testing.T) {
 		t.Fatalf("unexpected Docker client version %q", version)
 	}
 }
+
+func TestSafeCommandVersionUsesStableReadableDirectory(t *testing.T) {
+	directory := t.TempDir()
+	binary := filepath.Join(directory, "version-probe")
+	script := "#!/bin/sh\n" +
+		"pwd\n"
+	if err := os.WriteFile(binary, []byte(script), 0o700); err != nil {
+		t.Fatalf("write synthetic version probe: %v", err)
+	}
+
+	version, ok := safeCommandVersion(context.Background(), []string{binary})
+	if !ok {
+		t.Fatal("version probe failed from its stable working directory")
+	}
+	if version != "/" {
+		t.Fatalf("version probe inherited an unstable working directory: %q", version)
+	}
+}

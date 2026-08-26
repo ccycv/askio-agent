@@ -41,6 +41,10 @@ func safeCommandVersion(ctx context.Context, paths []string, args ...string) (st
 			continue
 		}
 		command := exec.CommandContext(ctx, path, args...)
+		// Version probes must not inherit the service manager's working directory.
+		// Node-based clients such as mongosh resolve their startup directory before
+		// printing a version and fail when the agent was launched from /root.
+		command.Dir = "/"
 		command.Env = []string{"PATH=/usr/sbin:/usr/bin:/sbin:/bin", "LANG=C", "LC_ALL=C", "HOME=/nonexistent"}
 		output, err := command.CombinedOutput()
 		if err != nil {
