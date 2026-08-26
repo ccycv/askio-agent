@@ -30,7 +30,7 @@ func TestSafeCommandVersionUsesStableReadableDirectory(t *testing.T) {
 	directory := t.TempDir()
 	binary := filepath.Join(directory, "version-probe")
 	script := "#!/bin/sh\n" +
-		"pwd\n"
+		"printf '%s|%s\\n' \"$PWD\" \"$NODE_OPTIONS\"\n"
 	if err := os.WriteFile(binary, []byte(script), 0o700); err != nil {
 		t.Fatalf("write synthetic version probe: %v", err)
 	}
@@ -39,7 +39,7 @@ func TestSafeCommandVersionUsesStableReadableDirectory(t *testing.T) {
 	if !ok {
 		t.Fatal("version probe failed from its stable working directory")
 	}
-	if version != "/" {
-		t.Fatalf("version probe inherited an unstable working directory: %q", version)
+	if version != "/|--jitless" {
+		t.Fatalf("version probe did not retain the hardened execution contract: %q", version)
 	}
 }

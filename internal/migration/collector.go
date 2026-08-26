@@ -35,6 +35,19 @@ type Observation struct {
 	Redactions    map[string]any    `json:"redactions"`
 }
 
+func migrationCommandEnvironment() []string {
+	// The agent and broker retain MemoryDenyWriteExecute. Mongosh is a bundled
+	// Node/V8 executable, so force its non-JIT mode instead of weakening either
+	// service sandbox. Non-Node database tools ignore NODE_OPTIONS.
+	return []string{
+		"PATH=/usr/sbin:/usr/bin:/sbin:/bin",
+		"LANG=C",
+		"LC_ALL=C",
+		"HOME=/nonexistent",
+		"NODE_OPTIONS=--jitless",
+	}
+}
+
 func safeCommandVersion(ctx context.Context, paths []string, args ...string) (string, bool) {
 	for _, path := range paths {
 		if info, err := os.Stat(path); err != nil || !info.Mode().IsRegular() || info.Mode()&0o111 == 0 {
@@ -45,7 +58,7 @@ func safeCommandVersion(ctx context.Context, paths []string, args ...string) (st
 		// Node-based clients such as mongosh resolve their startup directory before
 		// printing a version and fail when the agent was launched from /root.
 		command.Dir = "/"
-		command.Env = []string{"PATH=/usr/sbin:/usr/bin:/sbin:/bin", "LANG=C", "LC_ALL=C", "HOME=/nonexistent"}
+		command.Env = migrationCommandEnvironment()
 		output, err := command.CombinedOutput()
 		if err != nil {
 			return "", false

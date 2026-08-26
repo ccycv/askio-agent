@@ -173,7 +173,8 @@ func (e *NativeExecutor) runMongoDBShell(ctx context.Context, binding mongodbBin
 		return err
 	}
 	command := exec.CommandContext(ctx, mongosh, "--quiet", "--nodb", "--file", scriptPath)
-	command.Env = []string{"PATH=/usr/sbin:/usr/bin:/sbin:/bin", "LANG=C", "LC_ALL=C", "HOME=/nonexistent"}
+	command.Dir = "/"
+	command.Env = migrationCommandEnvironment()
 	var stdout, stderr cappedBuffer
 	stdout.limit = 8 * 1024 * 1024
 	stderr.limit = 32 * 1024
@@ -242,7 +243,8 @@ func (e *NativeExecutor) runMongoDBTool(ctx context.Context, binding mongodbBind
 	}
 	commandArgs := append([]string{"--config=" + configPath}, args...)
 	command := exec.CommandContext(ctx, binary, commandArgs...)
-	command.Env = []string{"PATH=/usr/sbin:/usr/bin:/sbin:/bin", "LANG=C", "LC_ALL=C", "HOME=/nonexistent"}
+	command.Dir = "/"
+	command.Env = migrationCommandEnvironment()
 	command.Stdout = stdout
 	var stderr cappedBuffer
 	stderr.limit = 32 * 1024
