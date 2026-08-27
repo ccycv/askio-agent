@@ -232,3 +232,121 @@ func TestRequiredPostgresExtensionsMustBeBoundedCanonicalAndVersioned(t *testing
 		}
 	}
 }
+
+func TestPostgresDatabaseSetBindingAcceptsOneToEightOrderedMembers(t *testing.T) {
+	binding, err := parsePostgresBinding(postgresBindingJSON(map[string]any{
+		"schema_version": postgresBindingSchemaV2,
+		"database":       nil,
+		"databases":      []string{"accounts", "analytics", "jobs"},
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(binding.Databases) != 3 || binding.Database != "accounts" || postgresDatabaseScopes(binding)[2].Database != "jobs" {
+		t.Fatalf("database-set order was not retained: %#v", binding.Databases)
+	}
+	binding.clear()
+
+	target, err := parsePostgresBinding(postgresBindingJSON(map[string]any{
+		"schema_version": postgresBindingSchemaV2,
+		"database":       nil,
+		"databases":      []string{"askio_mig_accounts", "askio_mig_analytics"},
+		"mode":           "target", "target_role": "askio_mig_owner", "reset_allowed": true,
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	target.clear()
+}
+
+func TestPostgresDatabaseSetBindingRejectsDuplicatesSystemsAndUnsafeTargets(t *testing.T) {
+	for _, databases := range [][]string{
+		{"accounts", "accounts"},
+		{"accounts", "postgres"},
+		{"accounts", "template1"},
+	} {
+		if _, err := parsePostgresBinding(postgresBindingJSON(map[string]any{
+			"schema_version": postgresBindingSchemaV2, "database": nil, "databases": databases,
+		})); err == nil {
+			t.Fatalf("expected invalid source database set to be rejected: %#v", databases)
+		}
+	}
+	if _, err := parsePostgresBinding(postgresBindingJSON(map[string]any{
+		"schema_version": postgresBindingSchemaV2, "database": nil,
+		"databases": []string{"customer_production", "askio_mig_analytics"},
+		"mode":      "target", "target_role": "askio_mig_owner", "reset_allowed": true,
+	})); err == nil {
+		t.Fatal("expected every target database to require the migration namespace")
+	}
+}
+
+func TestPostgresDatabaseSetRequiresMatchingOrderedContract(t *testing.T) {
+	binding, err := parsePostgresBinding(postgresBindingJSON(map[string]any{
+		"schema_version": postgresBindingSchemaV2, "database": nil,
+		"databases": []string{"accounts", "analytics"},
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	contract := map[string]any{
+		"schema_version": "operations.migration.database-contract.v1",
+		"source_engine":  "postgresql", "target_engine": "postgresql",
+		"database_mappings": []map[string]string{
+			{"source_database": "accounts", "target_database": "askio_mig_accounts"},
+			{"source_database": "analytics", "target_database": "askio_mig_analytics"},
+		},
+		"role_map": map[string]string{"fixture_owner": "askio_mig_owner"},
+	}
+	if err := validatePostgresDatabaseContract(map[string]any{"database_contract": contract}, binding); err != nil {
+		t.Fatal(err)
+	}
+	if err := validatePostgresDatabaseContract(map[string]any{}, binding); err == nil {
+		t.Fatal("expected a database-set binding without a reviewed contract to be rejected")
+	}
+	contract["database_mappings"] = []map[string]string{
+		{"source_database": "analytics", "target_database": "askio_mig_analytics"},
+		{"source_database": "accounts", "target_database": "askio_mig_accounts"},
+	}
+	if err := validatePostgresDatabaseContract(map[string]any{"database_contract": contract}, binding); err == nil {
+		t.Fatal("expected reordered database mappings to be rejected")
+	}
+}
+
+func TestPostgresDatabaseBundleIsDigestBoundAndOrdered(t *testing.T) {
+	directory := t.TempDir()
+	binding, err := parsePostgresBinding(postgresBindingJSON(map[string]any{
+		"schema_version": postgresBindingSchemaV2, "database": nil,
+		"databases": []string{"askio_mig_accounts", "askio_mig_jobs"},
+		"mode":      "target", "target_role": "askio_mig_owner", "reset_allowed": true,
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	digestA := "sha256:" + strings.Repeat("a", 64)
+	digestB := "sha256:" + strings.Repeat("b", 64)
+	bundle := postgresDatabaseBundle{
+		SchemaVersion: "operations.migration.postgres-database-bundle.v1", AggregateManifestDigest: digestA,
+		Members: []postgresDatabaseBundleMember{
+			{Ordinal: 0, SourceDatabase: "accounts", DumpArtifactHandle: "database-1.dump", DumpArtifactDigest: digestA, DumpSizeBytes: 10, ACLArtifactHandle: "database-1.acl.json", ACLArtifactDigest: digestB, ACLSizeBytes: 5, ManifestDigest: digestA, RoleMapDigest: MustDigest(binding.RoleMap)},
+			{Ordinal: 1, SourceDatabase: "jobs", DumpArtifactHandle: "database-2.dump", DumpArtifactDigest: digestB, DumpSizeBytes: 12, ACLArtifactHandle: "database-2.acl.json", ACLArtifactDigest: digestA, ACLSizeBytes: 6, ManifestDigest: digestB, RoleMapDigest: MustDigest(binding.RoleMap)},
+		},
+	}
+	digest, _, err := writePostgresDatabaseBundle(directory, bundle)
+	if err != nil {
+		t.Fatal(err)
+	}
+	read, err := readPostgresDatabaseBundle(filepath.Join(directory, postgresDatabaseBundleHandle), digest, binding)
+	if err != nil || len(read.Members) != 2 {
+		t.Fatalf("database bundle did not round trip: %#v %v", read, err)
+	}
+	read.Members[1].Ordinal = 0
+	data, _ := json.Marshal(read)
+	badPath := filepath.Join(t.TempDir(), postgresDatabaseBundleHandle)
+	if err := os.WriteFile(badPath, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	badDigest, _, _ := fileSHA256(badPath)
+	if _, err := readPostgresDatabaseBundle(badPath, badDigest, binding); err == nil {
+		t.Fatal("expected reordered database bundle to be rejected")
+	}
+}

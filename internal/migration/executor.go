@@ -41,18 +41,19 @@ var supportedPrimitives = map[string]struct{}{
 }
 
 type NativeExecutor struct {
-	rootHandles   map[string]string
-	resolver      *ScopeResolver
-	broker        *BrokerClient
-	bindings      BindingResolver
-	tickets       TicketResolver
-	stateDir      string
-	agentID       string
-	identity      *Identity
-	backendKeyID  string
-	backendPublic ed25519.PublicKey
-	capacityCheck func(string, int64) error
-	logger        *slog.Logger
+	rootHandles            map[string]string
+	resolver               *ScopeResolver
+	broker                 *BrokerClient
+	bindings               BindingResolver
+	tickets                TicketResolver
+	stateDir               string
+	agentID                string
+	identity               *Identity
+	backendKeyID           string
+	backendPublic          ed25519.PublicKey
+	capacityCheck          func(string, int64) error
+	oplogWindowHookForTest func(context.Context, mongodbBinding) error
+	logger                 *slog.Logger
 }
 
 func (e *NativeExecutor) ensureCapacity(path string, requiredBytes int64) error {

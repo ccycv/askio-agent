@@ -202,6 +202,157 @@ func TestPostgresOfflineMigrationCycle(t *testing.T) {
 	}
 }
 
+func TestPostgresMultiDatabaseMigrationCycle(t *testing.T) {
+	if os.Getenv("ASKIO_MIGRATION_POSTGRES_INTEGRATION") != postgresDisposableIntegrationGate {
+		t.Skip("set ASKIO_MIGRATION_POSTGRES_INTEGRATION=disposable-postgres-14-to-16 inside the disposable fixture")
+	}
+	sourceSocket := os.Getenv("ASKIO_MIGRATION_POSTGRES_SOURCE_SOCKET")
+	targetSocket := os.Getenv("ASKIO_MIGRATION_POSTGRES_TARGET_SOCKET")
+	password := os.Getenv("ASKIO_MIGRATION_POSTGRES_PASSWORD")
+	if !filepath.IsAbs(sourceSocket) || !filepath.IsAbs(targetSocket) || sourceSocket == targetSocket || password == "" {
+		t.Fatal("the disposable fixture requires distinct socket directories and a password")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+	workspace := t.TempDir()
+	sourceStaging := filepath.Join(workspace, "source-staging")
+	targetStaging := filepath.Join(workspace, "target-staging")
+	stateDir := filepath.Join(workspace, "state")
+	for _, directory := range []string{sourceStaging, targetStaging, stateDir} {
+		if err := os.Mkdir(directory, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	executor, err := NewNativeExecutor(map[string]string{
+		"source_staging": sourceStaging, "target_staging": targetStaging,
+	}, filepath.Join(workspace, "unused-broker.sock"), stateDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	executor.capacityCheck = func(string, int64) error { return nil }
+	const (
+		sourceBindingID = "51111111-1111-4111-8111-111111111111"
+		targetBindingID = "52222222-2222-4222-8222-222222222222"
+		targetOwner     = "askio_mig_multi_owner"
+	)
+	sourceDatabases := []string{"askio_multi_accounts", "askio_multi_analytics"}
+	targetDatabases := []string{"askio_mig_multi_accounts", "askio_mig_multi_analytics"}
+	roleMap := map[string]string{"postgres": targetOwner}
+	sourceJSON := mustPostgresIntegrationBindingJSON(t, map[string]any{
+		"schema_version": postgresBindingSchemaV2, "mode": "source", "host": sourceSocket, "port": 5432,
+		"databases": sourceDatabases, "maintenance_database": "postgres", "username": "postgres",
+		"password": password, "ssl_mode": "disable", "role_map": roleMap,
+	})
+	targetJSON := mustPostgresIntegrationBindingJSON(t, map[string]any{
+		"schema_version": postgresBindingSchemaV2, "mode": "target", "host": targetSocket, "port": 5432,
+		"databases": targetDatabases, "maintenance_database": "postgres", "username": "postgres",
+		"password": password, "ssl_mode": "disable", "role_map": roleMap, "target_role": targetOwner, "reset_allowed": true,
+	})
+	executor.SetBindingResolver(func(_ context.Context, _ TaskEnvelope, bindingID string) ([]byte, error) {
+		switch bindingID {
+		case sourceBindingID:
+			return append([]byte(nil), sourceJSON...), nil
+		case targetBindingID:
+			return append([]byte(nil), targetJSON...), nil
+		default:
+			return nil, errors.New("unexpected multi-database integration binding")
+		}
+	})
+	source := mustParsePostgresIntegrationBinding(t, sourceJSON)
+	defer source.clear()
+	target := mustParsePostgresIntegrationBinding(t, targetJSON)
+	defer target.clear()
+	for _, statement := range []string{
+		"create database askio_multi_accounts with owner postgres template template0 encoding 'UTF8'",
+		"create database askio_multi_analytics with owner postgres template template0 encoding 'UTF8'",
+	} {
+		if _, err := executor.queryPostgres(ctx, source, source.MaintenanceDatabase, statement); err != nil {
+			t.Fatalf("source database-set fixture setup failed: %v", err)
+		}
+	}
+	if _, err := executor.queryPostgres(ctx, source, sourceDatabases[0], "create table accounts(id bigint primary key, name text not null); insert into accounts values (1,'alpha'),(2,'beta')"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := executor.queryPostgres(ctx, source, sourceDatabases[1], "create table events(id bigint primary key, kind text not null); insert into events values (1,'created'),(2,'updated'),(3,'verified')"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := executor.queryPostgres(ctx, target, target.MaintenanceDatabase, "do $$ begin create role "+quotePostgresIdentifier(targetOwner)+"; exception when duplicate_object then null; end $$"); err != nil {
+		t.Fatal(err)
+	}
+	for _, database := range targetDatabases {
+		statement := "create database " + quotePostgresIdentifier(database) + " with owner " + quotePostgresIdentifier(targetOwner) + " template template0 encoding 'UTF8'"
+		if _, err := executor.queryPostgres(ctx, target, target.MaintenanceDatabase, statement); err != nil {
+			t.Fatalf("target database-set fixture setup failed: %v", err)
+		}
+	}
+	contract := map[string]any{
+		"schema_version": "operations.migration.database-contract.v1",
+		"source_engine":  "postgresql", "target_engine": "postgresql",
+		"database_mappings": []map[string]string{
+			{"source_database": sourceDatabases[0], "target_database": targetDatabases[0]},
+			{"source_database": sourceDatabases[1], "target_database": targetDatabases[1]},
+		},
+		"role_map": roleMap,
+	}
+	task := TaskEnvelope{MigrationID: "53333333-3333-4333-8333-333333333333", AttemptID: "54444444-4444-4444-8444-444444444444"}
+	progress := func(string, int64, *int64) error { return nil }
+	sourceInputs := map[string]any{"database_binding_id": sourceBindingID, "database_contract": contract}
+	targetInputs := map[string]any{"database_binding_id": targetBindingID, "database_contract": contract}
+	sourceOutputs, err := executor.postgresInspect(ctx, task, sourceInputs)
+	if err != nil {
+		t.Fatalf("source database-set inspection failed: %v", err)
+	}
+	requiredExtensions, ok := sourceOutputs["required_extensions"].([]string)
+	if !ok || len(requiredExtensions) < 1 {
+		t.Fatalf("source database-set extensions are incomplete: %#v", sourceOutputs)
+	}
+	targetInspectInputs := clonePostgresIntegrationInputs(targetInputs)
+	targetInspectInputs["require_empty_target"] = true
+	targetInspectInputs["required_source_major"] = sourceOutputs["server_major"]
+	targetInspectInputs["required_extensions"] = requiredExtensions
+	targetOutputs, err := executor.postgresInspect(ctx, task, targetInspectInputs)
+	if err != nil || targetOutputs["database_count"] != 2 || targetOutputs["empty"] != true {
+		t.Fatalf("target database-set compatibility inspection failed: %#v %v", targetOutputs, err)
+	}
+	dumpInputs := clonePostgresIntegrationInputs(sourceInputs)
+	dumpInputs["staging_root_handle"] = "source_staging"
+	dumpOutputs, err := executor.postgresDump(ctx, task, dumpInputs, progress)
+	if err != nil {
+		t.Fatalf("source database-set dump failed: %v", err)
+	}
+	if dumpOutputs["database_count"] != 2 {
+		t.Fatalf("database-set bundle omitted a member: %#v", dumpOutputs)
+	}
+	stagingRelative := mustStringOutput(t, dumpOutputs, "dump_staging_relative_handle")
+	copyPostgresIntegrationDirectory(t, filepath.Join(sourceStaging, stagingRelative), filepath.Join(targetStaging, stagingRelative))
+	resetInputs := clonePostgresIntegrationInputs(targetInputs)
+	resetInputs["expected_empty_target_digest"] = mustStringOutput(t, targetOutputs, "empty_target_digest")
+	if _, err := executor.postgresReset(ctx, task, resetInputs); err != nil {
+		t.Fatalf("target database-set reset failed: %v", err)
+	}
+	restoreInputs := clonePostgresIntegrationInputs(targetInputs)
+	for key, value := range map[string]any{
+		"staging_root_handle": "target_staging", "dump_staging_relative_handle": stagingRelative,
+		"dump_artifact_handle":     mustStringOutput(t, dumpOutputs, "dump_artifact_handle"),
+		"dump_artifact_digest":     mustStringOutput(t, dumpOutputs, "dump_artifact_digest"),
+		"acl_artifact_handle":      mustStringOutput(t, dumpOutputs, "acl_artifact_handle"),
+		"acl_artifact_digest":      mustStringOutput(t, dumpOutputs, "acl_artifact_digest"),
+		"role_map_digest":          mustStringOutput(t, dumpOutputs, "role_map_digest"),
+		"expected_manifest_digest": mustStringOutput(t, dumpOutputs, "database_manifest_digest"),
+	} {
+		restoreInputs[key] = value
+	}
+	if _, err := executor.postgresRestore(ctx, task, restoreInputs, progress); err != nil {
+		t.Fatalf("target database-set restore failed: %v", err)
+	}
+	verifyInputs := clonePostgresIntegrationInputs(targetInputs)
+	verifyInputs["expected_manifest_digest"] = mustStringOutput(t, dumpOutputs, "database_manifest_digest")
+	verifyOutputs, err := executor.postgresVerify(ctx, task, verifyInputs)
+	if err != nil || verifyOutputs["database_count"] != 2 || verifyOutputs["total_rows"] != int64(5) {
+		t.Fatalf("target database-set verification failed: %#v %v", verifyOutputs, err)
+	}
+}
+
 func postgresIntegrationACLDiagnostics(ctx context.Context, executor *NativeExecutor, binding postgresBinding) string {
 	queries := []string{
 		"select distinct case when c.relkind='S' then 'SEQUENCE' else 'TABLE' end,acl.privilege_type from pg_class c join pg_namespace n on n.oid=c.relnamespace cross join lateral aclexplode(coalesce(c.relacl,acldefault(case when c.relkind='S' then 's'::\"char\" else 'r'::\"char\" end,c.relowner))) acl where n.nspname not in('pg_catalog','information_schema') and n.nspname !~ '^pg_toast' and c.relkind in('r','p','v','m','f','S') order by 1,2",

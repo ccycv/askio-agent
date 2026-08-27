@@ -87,4 +87,4 @@ docker run --rm \
   --env ASKIO_MIGRATION_POSTGRES_TARGET_SOCKET=/sockets/target \
   --env ASKIO_MIGRATION_POSTGRES_PASSWORD=fixture-pass \
   postgres:16 \
-  /work/migration.test -test.v -test.run '^TestPostgresOfflineMigrationCycle$'
+  /work/migration.test -test.v -test.run '^TestPostgres(Offline|MultiDatabase)MigrationCycle$'
