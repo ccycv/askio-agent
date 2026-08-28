@@ -32,7 +32,10 @@ var supportedPrimitives = map[string]struct{}{
 	"migration.mysql.verify.v1":    {},
 	"migration.mongodb.inspect.v1": {}, "migration.mongodb.dump.v1": {},
 	"migration.mongodb.reset-empty-target.v1": {}, "migration.mongodb.restore.v1": {},
-	"migration.mongodb.verify.v1":           {},
+	"migration.mongodb.verify.v1": {},
+	"migration.redis.inspect.v1":  {}, "migration.redis.dump.v1": {},
+	"migration.redis.reset-empty-target.v1": {}, "migration.redis.restore.v1": {},
+	"migration.redis.verify.v1":             {},
 	"migration.compose.preflight-target.v1": {},
 	"migration.compose.render.v1":           {}, "migration.compose.start-isolated.v1": {},
 	"migration.compose.stop.v1":     {},
@@ -402,6 +405,16 @@ func (e *NativeExecutor) Execute(ctx context.Context, task TaskEnvelope, progres
 		outputs, err = e.mongodbRestore(ctx, task, inputs, progress)
 	case "migration.mongodb.verify.v1":
 		outputs, err = e.mongodbVerify(ctx, task, inputs)
+	case "migration.redis.inspect.v1":
+		outputs, err = e.redisInspect(ctx, task, inputs)
+	case "migration.redis.dump.v1":
+		outputs, err = e.redisDump(ctx, task, inputs, progress)
+	case "migration.redis.reset-empty-target.v1":
+		outputs, err = e.redisReset(ctx, task, inputs)
+	case "migration.redis.restore.v1":
+		outputs, err = e.redisRestore(ctx, task, inputs, progress)
+	case "migration.redis.verify.v1":
+		outputs, err = e.redisVerify(ctx, task, inputs)
 	case "migration.files.sync.v1":
 		outputs, err = e.filesSync(ctx, task, inputs, progress)
 	default:

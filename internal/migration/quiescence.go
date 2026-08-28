@@ -95,6 +95,28 @@ func (e *NativeExecutor) newSourceDatabaseObserver(ctx context.Context, task Tas
 				return sourceDatabaseObservation{ManifestDigest: inspection.ManifestDigest, DatabaseBytes: inspection.DatabaseBytes}, nil
 			},
 		}, nil
+	case "redis", "valkey":
+		bindingID, binding, err := e.resolveRedisBinding(ctx, task, inputs)
+		if err != nil {
+			return sourceDatabaseObserver{}, err
+		}
+		if binding.Mode != "source" || binding.Engine != engine {
+			binding.clear()
+			return sourceDatabaseObserver{}, errors.New("source observation Redis or Valkey engine does not match its binding")
+		}
+		return sourceDatabaseObserver{
+			engine: engine, close: binding.clear,
+			inspect: func(sampleContext context.Context) (sourceDatabaseObservation, error) {
+				inspection, inspectErr := e.inspectRedis(sampleContext, bindingID, binding)
+				if inspectErr != nil {
+					return sourceDatabaseObservation{}, inspectErr
+				}
+				if !inspection.Exists {
+					return sourceDatabaseObservation{}, errors.New("source Redis or Valkey instance is unavailable")
+				}
+				return sourceDatabaseObservation{ManifestDigest: inspection.ManifestDigest, DatabaseBytes: inspection.DatabaseBytes}, nil
+			},
+		}, nil
 	default:
 		return sourceDatabaseObserver{}, errors.New("source observation database engine is unsupported")
 	}

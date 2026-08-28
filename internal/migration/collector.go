@@ -165,6 +165,13 @@ func listSystemdServices(ctx context.Context) []string {
 }
 
 func selectedDatabaseClientFact(ctx context.Context, engine string) (ObservationFact, error) {
+	if engine == "redis" || engine == "valkey" {
+		return ObservationFact{
+			Key: "database." + engine, Kind: "database",
+			Value:      map[string]any{"engine": engine, "client_available": true, "client": "embedded-resp2"},
+			Provenance: []string{"declared:embedded-redis-client"}, Confidence: 1,
+		}, nil
+	}
 	if engine == "mongodb" {
 		value := map[string]any{"engine": engine, "client_available": true}
 		provenanceValues := []string{}
@@ -256,7 +263,7 @@ func CollectObservation(ctx context.Context, task TaskEnvelope, rootHandles map[
 	}
 	return Observation{
 		SchemaVersion: "operations.migration.observation.v1",
-		Collector:     map[string]any{"id": "askio-linux-host", "version": "1.1.0", "manifest_digest": manifestDigest},
+		Collector:     map[string]any{"id": "askio-linux-host", "version": "1.2.0", "manifest_digest": manifestDigest},
 		EndpointRole:  role, ObservedAt: time.Now().UTC().Format(time.RFC3339Nano), Completeness: "complete", Facts: facts,
 		Redactions: map[string]any{"rules_version": "1.0.0", "values_removed": 0, "canary_hits": 0},
 	}, nil

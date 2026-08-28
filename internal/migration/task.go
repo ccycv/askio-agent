@@ -299,6 +299,8 @@ func expectedBindingPurpose(task TaskEnvelope, bindingID string) string {
 		family = "mysql"
 	case strings.HasPrefix(task.Primitive.ID, "migration.mongodb."):
 		family = "mongodb"
+	case strings.HasPrefix(task.Primitive.ID, "migration.redis."):
+		family = "redis"
 	case task.Primitive.ID == "migration.source.estimate.v1" || task.Primitive.ID == "migration.source.verify-quiescence.v1":
 		engine, _ := inputs["database_engine"].(string)
 		switch engine {
@@ -308,6 +310,8 @@ func expectedBindingPurpose(task TaskEnvelope, bindingID string) string {
 			family = "mysql"
 		case "mongodb":
 			family = "mongodb"
+		case "redis", "valkey":
+			family = "redis"
 		}
 	}
 	if family == "" {
