@@ -603,32 +603,46 @@ func wipeAndRemoveComposeSecret(path string) error {
 	if err != nil || !before.Mode().IsRegular() || before.Mode()&os.ModeSymlink != 0 || before.Size() < 0 || before.Size() > 16*1024 || !ownedByEffectiveUser(before) {
 		return errors.New("Compose runtime secret cleanup found an unsafe file")
 	}
-	file, err := openWritableNoSymlink(path)
+	readOnly, err := openNoSymlink(path)
 	if err != nil {
 		return errors.New("Compose runtime secret cleanup could not open the file safely")
 	}
-	opened, err := file.Stat()
+	opened, err := readOnly.Stat()
 	if err != nil || !opened.Mode().IsRegular() || !os.SameFile(before, opened) || opened.Size() != before.Size() {
-		file.Close()
+		readOnly.Close()
 		return errors.New("Compose runtime secret cleanup found a changed file")
 	}
-	// Permission changes and the wipe are performed through the already-opened
-	// descriptor. The root broker only calls this for its own 0700 snapshot
-	// directories; mutable agent-owned staging files are cleaned by the agent.
-	if err := file.Chmod(0o600); err != nil {
-		file.Close()
+	// Crash recovery starts with a deliberately read-only leaf. Open it without
+	// write access first, validate the inode, and change permissions through that
+	// descriptor before reopening the same inode for the wipe.
+	if err := readOnly.Chmod(0o600); err != nil {
+		readOnly.Close()
 		return errors.New("Compose runtime secret cleanup could not secure the file for wiping")
+	}
+	file, err := openWritableNoSymlink(path)
+	if err != nil {
+		readOnly.Close()
+		return errors.New("Compose runtime secret cleanup could not reopen the file safely")
+	}
+	writable, err := file.Stat()
+	if err != nil || !writable.Mode().IsRegular() || !os.SameFile(opened, writable) || writable.Size() != opened.Size() {
+		file.Close()
+		readOnly.Close()
+		return errors.New("Compose runtime secret cleanup found a changed writable file")
+	}
+	if err := readOnly.Close(); err != nil {
+		file.Close()
+		return errors.New("Compose runtime secret cleanup could not close the validation descriptor")
 	}
 	zero := make([]byte, opened.Size())
 	_, writeErr := file.WriteAt(zero, 0)
 	zeroBytes(zero)
 	syncErr := file.Sync()
-	after, statErr := os.Lstat(path)
 	closeErr := file.Close()
-	if writeErr != nil || syncErr != nil || statErr != nil || !os.SameFile(opened, after) || closeErr != nil {
+	if writeErr != nil || syncErr != nil || closeErr != nil {
 		return errors.New("Compose runtime secret cleanup failed")
 	}
-	return os.Remove(path)
+	return unlinkSameFileNoSymlink(path, opened)
 }
 
 func ownedByEffectiveUser(info os.FileInfo) bool {
@@ -744,12 +758,11 @@ func wipeAndRemoveOpenComposeSecret(path string, file *os.File) error {
 	_, writeErr := file.WriteAt(zero, 0)
 	zeroBytes(zero)
 	syncErr := file.Sync()
-	after, statErr := os.Lstat(path)
 	closeErr := file.Close()
-	if writeErr != nil || syncErr != nil || statErr != nil || !os.SameFile(opened, after) || closeErr != nil {
+	if writeErr != nil || syncErr != nil || closeErr != nil {
 		return errors.New("Compose runtime secret cleanup failed")
 	}
-	return os.Remove(path)
+	return unlinkSameFileNoSymlink(path, opened)
 }
 
 func (e *NativeExecutor) stageComposeRuntimeSecrets(ctx context.Context, task TaskEnvelope, inputs map[string]any) (func() error, error) {

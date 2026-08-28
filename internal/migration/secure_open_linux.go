@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"syscall"
 
 	"golang.org/x/sys/unix"
 )
@@ -160,4 +161,32 @@ func openWritableNoSymlink(path string) (*os.File, error) {
 		return nil, err
 	}
 	return os.NewFile(uintptr(fd), path), nil
+}
+
+func unlinkSameFileNoSymlink(path string, expected os.FileInfo) error {
+	leaf := filepath.Base(path)
+	parent := filepath.Dir(path)
+	if leaf == "" || leaf == "." || leaf == ".." || expected == nil {
+		return errors.New("cleanup file path is invalid")
+	}
+	expectedStat, ok := expected.Sys().(*syscall.Stat_t)
+	if !ok {
+		return errors.New("cleanup file identity is unavailable")
+	}
+	parentFD, err := openDirectoryAt(unix.AT_FDCWD, parent, uint64(unix.RESOLVE_NO_SYMLINKS|unix.RESOLVE_NO_MAGICLINKS))
+	if err != nil {
+		return err
+	}
+	defer unix.Close(parentFD)
+	var current unix.Stat_t
+	if err := unix.Fstatat(parentFD, leaf, &current, unix.AT_SYMLINK_NOFOLLOW); err != nil {
+		if errors.Is(err, unix.ENOENT) {
+			return nil
+		}
+		return err
+	}
+	if expectedStat.Dev != current.Dev || expectedStat.Ino != current.Ino || current.Mode&unix.S_IFMT != unix.S_IFREG {
+		return errors.New("cleanup file changed before removal")
+	}
+	return unix.Unlinkat(parentFD, leaf, 0)
 }

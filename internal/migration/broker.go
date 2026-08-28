@@ -219,6 +219,9 @@ func NewBroker(config BrokerConfig) (*Broker, error) {
 	if err := broker.loadFences(); err != nil {
 		return nil, err
 	}
+	if err := broker.validateServiceFenceMarkers(); err != nil {
+		return nil, err
+	}
 	return broker, nil
 }
 
@@ -983,6 +986,9 @@ func (b *Broker) resumeAuthorizedWriterFenceReleases(ctx context.Context) error 
 }
 
 func (b *Broker) reconcileWriterFences(ctx context.Context) error {
+	if err := b.validateServiceFenceMarkers(); err != nil {
+		return err
+	}
 	controller, err := b.serviceController()
 	if err != nil {
 		now := time.Now().UTC().Format(time.RFC3339Nano)

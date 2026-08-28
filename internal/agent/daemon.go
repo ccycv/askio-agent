@@ -313,10 +313,9 @@ func (d *Daemon) postHeartbeat(ctx context.Context) error {
 		cancel()
 		if err != nil {
 			d.logger.Warn("writer-fence heartbeat attestation failed closed", "err", err)
-			payload["migration_writer_fences"] = []migration.WriterFenceAttestation{}
-		} else {
-			payload["migration_writer_fences"] = attestations
+			return err
 		}
+		payload["migration_writer_fences"] = attestations
 		signedPayload, err := d.migrationRunner.SignRequestBody(migration.RouteHeartbeat, payload)
 		if err != nil {
 			d.logger.Warn("writer-fence heartbeat signing failed closed", "err", err)

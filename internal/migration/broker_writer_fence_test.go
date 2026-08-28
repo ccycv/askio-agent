@@ -216,6 +216,26 @@ func TestWriterFenceBootInhibitorPrecedesIntentPersistence(t *testing.T) {
 	}
 }
 
+func TestOrphanWriterFenceInhibitorBlocksAttestation(t *testing.T) {
+	controller := &fakeServiceController{
+		active: map[string]bool{"api.service": false, "worker.service": false}, failures: map[string]error{}, unknown: map[string]error{},
+	}
+	broker := writerFenceBroker(t, controller)
+	if err := broker.activateServiceFenceInhibitors([]string{"api.service"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := broker.validateServiceFenceMarkers(); err == nil {
+		t.Fatal("orphan writer-fence marker was accepted without durable ownership")
+	}
+	outputs, err := broker.attestWriterFences(context.Background())
+	if err == nil {
+		t.Fatal("orphan writer-fence marker was reported as an empty valid attestation")
+	}
+	if fences, ok := outputs["fences"].([]WriterFenceAttestation); ok && len(fences) != 0 {
+		t.Fatalf("orphan marker invented an owned attestation: %#v", fences)
+	}
+}
+
 func TestWriterFenceReleaseRestartsOnlyPreviouslyActiveServices(t *testing.T) {
 	controller := &fakeServiceController{
 		active:   map[string]bool{"api.service": true, "worker.service": false},
