@@ -57,6 +57,7 @@ func TestPostgresLogicalLowerDowntimeCycle(t *testing.T) {
 		targetDatabase   = "askio_mig_logical"
 		targetOwner      = "askio_mig_owner"
 		replicationRole  = "askio_replicator"
+		driftOwner       = "askio_drift_owner"
 	)
 	roleMap := map[string]string{"postgres": targetOwner, replicationRole: targetOwner}
 	sourceJSON := mustPostgresIntegrationBindingJSON(t, map[string]any{
@@ -107,12 +108,20 @@ func TestPostgresLogicalLowerDowntimeCycle(t *testing.T) {
 		t.Fatalf("target owner setup failed: %v", err)
 	}
 	if _, err := executor.queryPostgres(ctx, target, target.MaintenanceDatabase,
+		"create role "+quotePostgresIdentifier(driftOwner)+" superuser"); err != nil {
+		t.Fatalf("target drift owner setup failed: %v", err)
+	}
+	if _, err := executor.queryPostgres(ctx, target, target.MaintenanceDatabase,
 		"create database "+quotePostgresIdentifier(targetDatabase)+" with owner "+quotePostgresIdentifier(targetOwner)+" template template0 encoding 'UTF8'"); err != nil {
 		t.Fatalf("target database setup failed: %v", err)
 	}
 	if _, err := executor.queryPostgres(ctx, source, source.MaintenanceDatabase,
 		"create role "+quotePostgresIdentifier(replicationRole)+" login replication bypassrls password "+quotePostgresLiteral(password)); err != nil {
 		t.Fatalf("replication role setup failed: %v", err)
+	}
+	if _, err := executor.queryPostgres(ctx, source, source.MaintenanceDatabase,
+		"create role "+quotePostgresIdentifier(driftOwner)+" superuser"); err != nil {
+		t.Fatalf("source drift owner setup failed: %v", err)
 	}
 	if _, err := executor.queryPostgres(ctx, source, source.Database,
 		"create table no_primary_key(payload text); grant connect on database "+quotePostgresIdentifier(sourceDatabase)+" to "+quotePostgresIdentifier(replicationRole)+"; grant usage on schema public to "+quotePostgresIdentifier(replicationRole)+"; grant select on table no_primary_key to "+quotePostgresIdentifier(replicationRole)); err != nil {
@@ -180,11 +189,26 @@ func TestPostgresLogicalLowerDowntimeCycle(t *testing.T) {
 	}
 	prepareInputs := clonePostgresIntegrationInputs(sourceInputs)
 	prepareInputs["expected_schema_digest"] = mustStringOutput(t, schemaOutput, "schema_digest")
-	if _, err := executor.postgresLogicalPrepareSource(ctx, task, prepareInputs); err != nil {
+	prepareOutput, err := executor.postgresLogicalPrepareSource(ctx, task, prepareInputs)
+	if err != nil {
 		t.Fatalf("logical source preparation failed: %v", err)
 	}
 	startInputs := clonePostgresIntegrationInputs(targetInputs)
 	startInputs["expected_schema_digest"] = mustStringOutput(t, schemaOutput, "schema_digest")
+	startInputs["expected_publication_owner"] = mustStringOutput(t, prepareOutput, "publication_owner")
+	startInputs["expected_publication_definition_digest"] = mustStringOutput(t, prepareOutput, "publication_definition_digest")
+	names, _ := postgresLogicalObjectNames(task.MigrationID, sourceDatabase)
+	if _, err := executor.queryPostgres(ctx, source, source.Database,
+		"alter publication "+quotePostgresIdentifier(names.Publication)+" owner to "+quotePostgresIdentifier(driftOwner)); err != nil {
+		t.Fatalf("publication ownership tamper setup failed: %v", err)
+	}
+	if _, err := executor.postgresLogicalStartSubscription(ctx, task, startInputs, progress); err == nil || !strings.Contains(err.Error(), "definition") {
+		t.Fatalf("publication owner drift was not rejected: %v", err)
+	}
+	if _, err := executor.queryPostgres(ctx, source, source.Database,
+		"alter publication "+quotePostgresIdentifier(names.Publication)+" owner to postgres"); err != nil {
+		t.Fatalf("publication ownership restore failed: %v", err)
+	}
 	if _, err := executor.postgresLogicalStartSubscription(ctx, task, startInputs, progress); err != nil {
 		t.Fatalf("logical initial copy failed: %v", err)
 	}
@@ -206,6 +230,17 @@ func TestPostgresLogicalLowerDowntimeCycle(t *testing.T) {
 	finalTargetInputs["final_state_staging_relative_handle"] = finalRelative
 	finalTargetInputs["final_state_artifact_handle"] = mustStringOutput(t, finalOutput, "final_state_artifact_handle")
 	finalTargetInputs["final_state_artifact_digest"] = mustStringOutput(t, finalOutput, "final_state_artifact_digest")
+	if _, err := executor.queryPostgres(ctx, target, target.Database,
+		"alter subscription "+quotePostgresIdentifier(names.Subscription)+" owner to "+quotePostgresIdentifier(driftOwner)); err != nil {
+		t.Fatalf("subscription ownership tamper setup failed: %v", err)
+	}
+	if _, err := executor.postgresLogicalFinalizeTarget(ctx, task, finalTargetInputs, progress); err == nil || !strings.Contains(err.Error(), "definition") {
+		t.Fatalf("subscription owner drift was not rejected: %v", err)
+	}
+	if _, err := executor.queryPostgres(ctx, target, target.Database,
+		"alter subscription "+quotePostgresIdentifier(names.Subscription)+" owner to postgres"); err != nil {
+		t.Fatalf("subscription ownership restore failed: %v", err)
+	}
 	finalTarget, err := executor.postgresLogicalFinalizeTarget(ctx, task, finalTargetInputs, progress)
 	if err != nil || finalTarget["verified"] != true || finalTarget["subscription_detached"] != true {
 		t.Fatalf("logical target finalization failed: %#v %v", finalTarget, err)
@@ -228,7 +263,6 @@ func TestPostgresLogicalLowerDowntimeCycle(t *testing.T) {
 	if _, err := executor.postgresLogicalCleanupTarget(ctx, task, targetInputs); err != nil {
 		t.Fatalf("logical target cleanup failed: %v", err)
 	}
-	names, _ := postgresLogicalObjectNames(task.MigrationID, sourceDatabase)
 	sourceInventory, err := executor.queryPostgres(ctx, source, source.Database,
 		"select (not exists(select 1 from pg_publication where pubname="+quotePostgresLiteral(names.Publication)+") and not exists(select 1 from pg_replication_slots where slot_name="+quotePostgresLiteral(names.Slot)+"))::text")
 	cleanSource, cleanSourceErr := postgresBool(sourceInventory)

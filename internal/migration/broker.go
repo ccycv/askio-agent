@@ -24,8 +24,9 @@ import (
 )
 
 const (
-	brokerSchemaVersion    = "operations.migration.broker.v1"
-	DefaultBrokerStatePath = "/var/lib/askio-migration-broker/broker-state.json"
+	brokerSchemaVersion     = "operations.migration.broker.v1"
+	brokerFenceAttestAction = "attest-active-writer-fences"
+	DefaultBrokerStatePath  = "/var/lib/askio-migration-broker/broker-state.json"
 )
 
 var (
@@ -36,6 +37,7 @@ var (
 type BrokerRequest struct {
 	SchemaVersion string       `json:"schema_version"`
 	RequestID     string       `json:"request_id"`
+	Action        string       `json:"action,omitempty"`
 	Task          TaskEnvelope `json:"task"`
 }
 
@@ -72,17 +74,34 @@ type brokerPersistentState struct {
 }
 
 type writerFenceState struct {
-	MigrationID      string   `json:"migration_id"`
-	RunID            string   `json:"run_id"`
-	Services         []string `json:"services"`
-	PreviouslyActive []string `json:"previously_active_services,omitempty"`
-	Active           bool     `json:"active"`
-	Phase            string   `json:"phase,omitempty"`
-	FencingToken     int64    `json:"fencing_token"`
-	ActivatedAt      string   `json:"activated_at"`
-	LastVerifiedAt   string   `json:"last_verified_at"`
-	ViolationCount   int64    `json:"violation_count"`
-	LastViolation    string   `json:"last_violation_at,omitempty"`
+	MigrationID        string   `json:"migration_id"`
+	RunID              string   `json:"run_id"`
+	Services           []string `json:"services"`
+	PreviouslyActive   []string `json:"previously_active_services,omitempty"`
+	Active             bool     `json:"active"`
+	Phase              string   `json:"phase,omitempty"`
+	FencingToken       int64    `json:"fencing_token"`
+	ActivatedAt        string   `json:"activated_at"`
+	LastVerifiedAt     string   `json:"last_verified_at"`
+	ViolationCount     int64    `json:"violation_count"`
+	LastViolation      string   `json:"last_violation_at,omitempty"`
+	WatchdogErrorCount int64    `json:"watchdog_error_count"`
+	LastWatchdogError  string   `json:"last_watchdog_error_at,omitempty"`
+}
+
+type WriterFenceAttestation struct {
+	MigrationID        string `json:"migration_id"`
+	RunID              string `json:"run_id"`
+	Active             bool   `json:"active"`
+	Phase              string `json:"phase"`
+	FencingToken       int64  `json:"fencing_token"`
+	ViolationCount     int64  `json:"violation_count"`
+	WatchdogErrorCount int64  `json:"watchdog_error_count"`
+	ActivatedAt        string `json:"activated_at"`
+	LastVerifiedAt     string `json:"last_verified_at"`
+	LastViolation      string `json:"last_violation_at,omitempty"`
+	LastWatchdogError  string `json:"last_watchdog_error_at,omitempty"`
+	AttestedAt         string `json:"attested_at"`
 }
 
 const (
@@ -525,6 +544,7 @@ func (b *Broker) activateWriterFence(ctx context.Context, controller serviceCont
 			Active: true, Phase: writerFenceActivating, FencingToken: intent.FencingToken,
 			ActivatedAt: intent.ActivatedAt, LastVerifiedAt: intent.LastVerifiedAt,
 			ViolationCount: intent.ViolationCount, LastViolation: intent.LastViolation,
+			WatchdogErrorCount: intent.WatchdogErrorCount, LastWatchdogError: intent.LastWatchdogError,
 		}
 		b.mu.Unlock()
 		return nil, err
@@ -793,6 +813,7 @@ func (b *Broker) verifyWriterFence(ctx context.Context, request BrokerRequest) (
 	return map[string]any{
 		"services": services, "writer_fence_active": true, "fence_fencing_token": fence.FencingToken,
 		"violation_count": fence.ViolationCount, "activated_at": fence.ActivatedAt,
+		"watchdog_error_count": fence.WatchdogErrorCount, "last_watchdog_error_at": fence.LastWatchdogError,
 		"verified_at": fence.LastVerifiedAt, "verification_started_at": started.Format(time.RFC3339Nano),
 		"interval_seconds": interval,
 	}, nil
@@ -837,13 +858,35 @@ func (b *Broker) monitorWriterFences(ctx context.Context) {
 			return
 		case <-ticker.C:
 		}
-		_ = b.reconcileWriterFences(ctx)
+		// Reconciliation persists every enforcement failure on the owned fence.
+		// A later quiescence proof rejects that durable error history even when
+		// this background loop has no caller to return the error to.
+		if err := b.reconcileWriterFences(ctx); err != nil {
+			continue
+		}
 	}
 }
 
 func (b *Broker) reconcileWriterFences(ctx context.Context) error {
 	controller, err := b.serviceController()
 	if err != nil {
+		now := time.Now().UTC().Format(time.RFC3339Nano)
+		b.mu.Lock()
+		for migrationID, current := range b.state.WriterFences {
+			if !current.Active {
+				continue
+			}
+			current.ViolationCount++
+			current.LastViolation = now
+			current.WatchdogErrorCount++
+			current.LastWatchdogError = now
+			b.state.WriterFences[migrationID] = current
+		}
+		persistErr := b.persistFences()
+		b.mu.Unlock()
+		if persistErr != nil {
+			return fmt.Errorf("writer fence watchdog unavailable and failure state could not be persisted: %w", persistErr)
+		}
 		return err
 	}
 	b.writerFenceMu.Lock()
@@ -856,17 +899,24 @@ func (b *Broker) reconcileWriterFences(ctx context.Context) error {
 		}
 	}
 	b.mu.Unlock()
+	var reconciliationFailed bool
 	for _, fence := range active {
 		violated := false
+		watchdogError := false
 		recoveredRelease := fence.Phase == writerFenceReleasing
 		countViolations := fence.Phase == writerFenceActive
 		for _, service := range fence.Services {
 			isActive, commandErr := controller.IsActive(ctx, service)
+			if commandErr != nil {
+				watchdogError = true
+			}
 			if commandErr != nil || isActive || recoveredRelease {
 				if countViolations {
 					violated = true
 				}
-				_ = controller.Operate(ctx, "stop", service)
+				if stopErr := controller.Operate(ctx, "stop", service); stopErr != nil {
+					watchdogError = true
+				}
 			}
 		}
 		now := time.Now().UTC().Format(time.RFC3339Nano)
@@ -881,15 +931,28 @@ func (b *Broker) reconcileWriterFences(ctx context.Context) error {
 						current.ActivatedAt = now
 					}
 				}
+			} else {
+				watchdogError = true
+				violated = true
 			}
 			if violated {
 				current.ViolationCount++
 				current.LastViolation = now
 			}
+			if watchdogError {
+				current.WatchdogErrorCount++
+				current.LastWatchdogError = now
+				reconciliationFailed = true
+			}
 			b.state.WriterFences[fence.MigrationID] = current
-			_ = b.persistFences()
+			if persistErr := b.persistFences(); persistErr != nil {
+				reconciliationFailed = true
+			}
 		}
 		b.mu.Unlock()
+	}
+	if reconciliationFailed {
+		return errors.New("writer fence watchdog recorded a blocking reconciliation error")
 	}
 	return nil
 }
@@ -1153,8 +1216,18 @@ func (b *Broker) composeStop(ctx context.Context, request BrokerRequest) (map[st
 }
 
 func (b *Broker) execute(ctx context.Context, request BrokerRequest) BrokerResponse {
+	if request.SchemaVersion != brokerSchemaVersion || request.RequestID == "" {
+		return BrokerResponse{OK: false, Error: &SafeError{Code: "MIGRATION_BROKER_REQUEST_INVALID", SafeMessage: "The typed broker request is invalid."}}
+	}
+	if request.Action == brokerFenceAttestAction {
+		outputs, err := b.attestWriterFences(ctx)
+		if err != nil {
+			return BrokerResponse{OK: false, Outputs: outputs, Error: &SafeError{Code: "MIGRATION_BROKER_FENCE_ATTESTATION_FAILED", SafeMessage: "Writer-fence attestation failed closed."}}
+		}
+		return BrokerResponse{OK: true, Outputs: outputs}
+	}
 	task := request.Task
-	if request.SchemaVersion != brokerSchemaVersion || request.RequestID == "" || request.RequestID != task.Nonce || task.Primitive.Version != "1.0.0" {
+	if request.Action != "" || request.RequestID != task.Nonce || task.Primitive.Version != "1.0.0" {
 		return BrokerResponse{OK: false, Error: &SafeError{Code: "MIGRATION_BROKER_REQUEST_INVALID", SafeMessage: "The typed broker request is invalid."}}
 	}
 	if _, err := verifySignedTaskEnvelope(task, b.config.BackendKeyID, b.config.AgentID, b.backendPublic); err != nil {
@@ -1197,6 +1270,33 @@ func (b *Broker) execute(ctx context.Context, request BrokerRequest) BrokerRespo
 		return response
 	}
 	return BrokerResponse{OK: true, Outputs: outputs}
+}
+
+func (b *Broker) attestWriterFences(ctx context.Context) (map[string]any, error) {
+	reconciliationErr := b.reconcileWriterFences(ctx)
+	attestedAt := time.Now().UTC().Format(time.RFC3339Nano)
+	b.mu.Lock()
+	attestations := make([]WriterFenceAttestation, 0, len(b.state.WriterFences))
+	for _, fence := range b.state.WriterFences {
+		if !fence.Active {
+			continue
+		}
+		attestations = append(attestations, WriterFenceAttestation{
+			MigrationID: fence.MigrationID, RunID: fence.RunID, Active: fence.Active, Phase: fence.Phase,
+			FencingToken: fence.FencingToken, ViolationCount: fence.ViolationCount,
+			WatchdogErrorCount: fence.WatchdogErrorCount, ActivatedAt: fence.ActivatedAt,
+			LastVerifiedAt: fence.LastVerifiedAt, LastViolation: fence.LastViolation,
+			LastWatchdogError: fence.LastWatchdogError, AttestedAt: attestedAt,
+		})
+	}
+	b.mu.Unlock()
+	sort.Slice(attestations, func(i, j int) bool {
+		if attestations[i].MigrationID == attestations[j].MigrationID {
+			return attestations[i].RunID < attestations[j].RunID
+		}
+		return attestations[i].MigrationID < attestations[j].MigrationID
+	})
+	return map[string]any{"fences": attestations, "attested_at": attestedAt, "reconciliation_ok": reconciliationErr == nil}, reconciliationErr
 }
 
 func (b *Broker) handleConnection(ctx context.Context, connection *net.UnixConn) {
@@ -1302,4 +1402,27 @@ func (c *BrokerClient) Execute(ctx context.Context, request BrokerRequest) (Brok
 		return BrokerResponse{}, err
 	}
 	return response, nil
+}
+
+func (c *BrokerClient) AttestWriterFences(ctx context.Context) ([]WriterFenceAttestation, error) {
+	response, err := c.Execute(ctx, BrokerRequest{
+		SchemaVersion: brokerSchemaVersion,
+		RequestID:     fmt.Sprintf("fence-attestation-%d", time.Now().UnixNano()),
+		Action:        brokerFenceAttestAction,
+	})
+	if err != nil {
+		return nil, err
+	}
+	if !response.OK {
+		return nil, errors.New("writer-fence attestation failed closed")
+	}
+	raw, err := json.Marshal(response.Outputs["fences"])
+	if err != nil {
+		return nil, err
+	}
+	var attestations []WriterFenceAttestation
+	if err := json.Unmarshal(raw, &attestations); err != nil {
+		return nil, err
+	}
+	return attestations, nil
 }

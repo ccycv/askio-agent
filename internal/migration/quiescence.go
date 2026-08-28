@@ -22,6 +22,7 @@ type sourceDatabaseObserver struct {
 	engine                 string
 	inspect                func(context.Context) (sourceDatabaseObservation, error)
 	logicalSlotRetainedWAL func(context.Context) (int64, error)
+	logicalSlotWALCeiling  int64
 	close                  func()
 }
 
@@ -54,17 +55,27 @@ func (e *NativeExecutor) newSourceDatabaseObserver(ctx context.Context, task Tas
 			},
 		}
 		if mode, _ := inputs["migration_mode"].(string); mode == "postgres-logical" {
+			contract, contractErr := postgresLogicalContractFromInputs(inputs, binding)
+			if contractErr != nil {
+				binding.clear()
+				return sourceDatabaseObserver{}, contractErr
+			}
 			slot, slotErr := stringInput(inputs, "logical_slot_name")
 			if slotErr != nil || !postgresIdentifierPattern.MatchString(slot) || !strings.HasPrefix(slot, "askio_slot_") {
 				binding.clear()
 				return sourceDatabaseObserver{}, errors.New("PostgreSQL logical estimate slot is invalid")
 			}
+			observer.logicalSlotWALCeiling = contract.MaximumSlotWALBytes
 			observer.logicalSlotRetainedWAL = func(sampleContext context.Context) (int64, error) {
 				rows, queryErr := e.queryPostgres(sampleContext, binding, binding.Database,
-					"select coalesce(pg_wal_lsn_diff(pg_current_wal_lsn(),restart_lsn),0)::bigint::text from pg_replication_slots where slot_name="+quotePostgresLiteral(slot))
-				value, parseErr := parseSingleInt(rows)
-				if queryErr != nil || parseErr != nil || value < 0 {
+					"select coalesce(pg_wal_lsn_diff(pg_current_wal_lsn(),restart_lsn),0)::bigint::text,active::text from pg_replication_slots where slot_name="+quotePostgresLiteral(slot))
+				if queryErr != nil || len(rows) != 1 || len(rows[0]) != 2 {
 					return 0, errors.New("PostgreSQL logical estimate slot is unavailable")
+				}
+				value, parseErr := parseSingleInt([][]string{{rows[0][0]}})
+				active, activeErr := postgresBool([][]string{{rows[0][1]}})
+				if parseErr != nil || activeErr != nil || value < 0 || !active {
+					return 0, errors.New("PostgreSQL logical estimate slot is missing or inactive")
 				}
 				return value, nil
 			}
@@ -198,6 +209,16 @@ func (e *NativeExecutor) sourceEstimate(
 			return nil, err
 		}
 		databasePayloadBytes = logicalSlotWALBytes
+		if observer.logicalSlotWALCeiling < minimumPostgresLogicalWAL || logicalSlotWALBytes > observer.logicalSlotWALCeiling {
+			return nil, errors.New("PostgreSQL logical slot exceeded the approved WAL retention ceiling")
+		}
+		minimumHeadroom := int64(math.Ceil(float64(observer.logicalSlotWALCeiling) * 0.2))
+		if minimumHeadroom < 64*1024*1024 {
+			minimumHeadroom = 64 * 1024 * 1024
+		}
+		if observer.logicalSlotWALCeiling-logicalSlotWALBytes < minimumHeadroom {
+			return nil, errors.New("PostgreSQL logical slot is too near the approved WAL retention ceiling")
+		}
 	}
 	payloadBytes := databasePayloadBytes + files.TotalBytes
 	estimatedSeconds := int64(math.Ceil(float64(payloadBytes) / float64(throughputMiB*1024*1024)))
@@ -206,12 +227,19 @@ func (e *NativeExecutor) sourceEstimate(
 	}
 	observedAt := time.Now().UTC().Format(time.RFC3339Nano)
 	proof := map[string]any{
-		"schema_version":             "operations.migration.cutover-estimate.v1",
-		"database_engine":            observer.engine,
-		"database_manifest_digest":   inspection.ManifestDigest,
-		"database_bytes":             inspection.DatabaseBytes,
-		"database_payload_bytes":     databasePayloadBytes,
-		"logical_slot_wal_bytes":     logicalSlotWALBytes,
+		"schema_version":                 "operations.migration.cutover-estimate.v1",
+		"database_engine":                observer.engine,
+		"database_manifest_digest":       inspection.ManifestDigest,
+		"database_bytes":                 inspection.DatabaseBytes,
+		"database_payload_bytes":         databasePayloadBytes,
+		"logical_slot_wal_bytes":         logicalSlotWALBytes,
+		"logical_slot_wal_ceiling_bytes": observer.logicalSlotWALCeiling,
+		"logical_slot_wal_remaining_bytes": func() int64 {
+			if observer.logicalSlotWALCeiling == 0 {
+				return 0
+			}
+			return observer.logicalSlotWALCeiling - logicalSlotWALBytes
+		}(),
 		"file_manifest_digest":       files.Digest,
 		"file_bytes":                 files.TotalBytes,
 		"file_count":                 files.FileCount,
@@ -322,7 +350,8 @@ func (e *NativeExecutor) sourceQuiescence(
 	}
 	writerActive, _ := verification.response.Outputs["writer_fence_active"].(bool)
 	violations, violationErr := boundedIntegerInput(verification.response.Outputs, "violation_count", 0, math.MaxInt64)
-	if violationErr != nil || !writerActive || violations != 0 {
+	watchdogErrors, watchdogErr := boundedIntegerInput(verification.response.Outputs, "watchdog_error_count", 0, math.MaxInt64)
+	if violationErr != nil || watchdogErr != nil || !writerActive || violations != 0 || watchdogErrors != 0 {
 		return nil, errors.New("writer fence was violated during source quiescence")
 	}
 	if beforeDatabase.ManifestDigest != afterDatabase.ManifestDigest || beforeFiles.Digest != afterFiles.Digest {
@@ -336,19 +365,20 @@ func (e *NativeExecutor) sourceQuiescence(
 	}
 	observedAt := time.Now().UTC().Format(time.RFC3339Nano)
 	proof := map[string]any{
-		"schema_version":               "operations.migration.source-quiescence.v1",
-		"database_engine":              observer.engine,
-		"writer_fence_active":          true,
-		"writer_fence_verified_at":     verification.response.Outputs["verified_at"],
-		"writer_fence_activated_at":    verification.response.Outputs["activated_at"],
-		"writer_fence_fencing_token":   verification.response.Outputs["fence_fencing_token"],
-		"writer_fence_violation_count": violations,
-		"interval_seconds":             interval,
-		"database_manifest_digest":     afterDatabase.ManifestDigest,
-		"file_manifest_digest":         afterFiles.Digest,
-		"file_count":                   afterFiles.FileCount,
-		"file_bytes":                   afterFiles.TotalBytes,
-		"observed_at":                  observedAt,
+		"schema_version":                    "operations.migration.source-quiescence.v1",
+		"database_engine":                   observer.engine,
+		"writer_fence_active":               true,
+		"writer_fence_verified_at":          verification.response.Outputs["verified_at"],
+		"writer_fence_activated_at":         verification.response.Outputs["activated_at"],
+		"writer_fence_fencing_token":        verification.response.Outputs["fence_fencing_token"],
+		"writer_fence_violation_count":      violations,
+		"writer_fence_watchdog_error_count": watchdogErrors,
+		"interval_seconds":                  interval,
+		"database_manifest_digest":          afterDatabase.ManifestDigest,
+		"file_manifest_digest":              afterFiles.Digest,
+		"file_count":                        afterFiles.FileCount,
+		"file_bytes":                        afterFiles.TotalBytes,
+		"observed_at":                       observedAt,
 	}
 	proofDigest, err := Digest(proof)
 	if err != nil {

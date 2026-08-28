@@ -102,6 +102,10 @@ type ticketAwareExecutor interface {
 	SetTicketResolver(TicketResolver)
 }
 
+type writerFenceAttestationExecutor interface {
+	WriterFenceAttestations(context.Context) ([]WriterFenceAttestation, error)
+}
+
 type sealedSecretEnvelope struct {
 	SchemaVersion      string `json:"schema_version"`
 	BindingID          string `json:"binding_id"`
@@ -137,16 +141,17 @@ type persistentState struct {
 }
 
 type Runner struct {
-	client        *api.Client
-	agentID       string
-	identity      *Identity
-	backendKeyID  string
-	backendPublic ed25519.PublicKey
-	statePath     string
-	executor      Executor
-	activityHook  func(bool)
-	mu            sync.Mutex
-	state         persistentState
+	client                 *api.Client
+	agentID                string
+	identity               *Identity
+	backendKeyID           string
+	backendPublic          ed25519.PublicKey
+	statePath              string
+	executor               Executor
+	activityHook           func(bool)
+	leaseHeartbeatInterval time.Duration
+	mu                     sync.Mutex
+	state                  persistentState
 }
 
 var errTaskPauseRequested = errors.New("migration task pause requested")
@@ -156,6 +161,14 @@ func (r *Runner) SetActivityHook(hook func(bool)) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.activityHook = hook
+}
+
+func (r *Runner) WriterFenceAttestations(ctx context.Context) ([]WriterFenceAttestation, error) {
+	attestor, ok := r.executor.(writerFenceAttestationExecutor)
+	if !ok {
+		return nil, errors.New("writer-fence attestation is unavailable")
+	}
+	return attestor.WriterFenceAttestations(ctx)
 }
 
 func parseBackendSigningKey(encoded string) (ed25519.PublicKey, error) {
@@ -195,6 +208,7 @@ func NewRunner(client *api.Client, agentID string, identity *Identity, backendKe
 	runner := &Runner{
 		client: client, agentID: agentID, identity: identity, backendKeyID: backendKeyID,
 		backendPublic: backendPublic, statePath: filepath.Join(stateDir, "task-state.json"), executor: executor,
+		leaseHeartbeatInterval: 20 * time.Second,
 		state: persistentState{
 			SchemaVersion: "operations.migration.agent-state.v1",
 			SeenNonces:    []string{}, SeenNonceExpiries: map[string]string{},
@@ -706,17 +720,85 @@ func (r *Runner) RunOnce(ctx context.Context) (bool, error) {
 		r.activityHook(true)
 		defer r.activityHook(false)
 	}
-	if err := r.progressCallback(ctx, task, "starting", 0, nil); err != nil {
+	executionContext, cancelExecution := context.WithCancel(ctx)
+	defer cancelExecution()
+	var progressMu sync.Mutex
+	lastPhase := "starting"
+	lastCompleted := int64(0)
+	var lastTotal *int64
+	var progressErr error
+	cloneTotal := func(value *int64) *int64 {
+		if value == nil {
+			return nil
+		}
+		copy := *value
+		return &copy
+	}
+	reportProgress := func(phase string, completed int64, total *int64) error {
+		progressMu.Lock()
+		defer progressMu.Unlock()
+		if progressErr != nil {
+			return progressErr
+		}
+		lastPhase = phase
+		lastCompleted = completed
+		lastTotal = cloneTotal(total)
+		if err := r.progressCallback(ctx, task, phase, completed, total); err != nil {
+			progressErr = err
+			cancelExecution()
+			return err
+		}
+		return nil
+	}
+	if err := reportProgress("starting", 0, nil); err != nil {
 		if errors.Is(err, errTaskPauseRequested) || errors.Is(err, errTaskCancelRequested) {
 			return true, r.persistAndPostResult(ctx, task, controlledResult(err, "starting", envelopeDigest))
 		}
 		return true, err
 	}
-	result := normalizeResult(r.executor.Execute(ctx, task, func(phase string, completed int64, total *int64) error {
-		return r.progressCallback(ctx, task, phase, completed, total)
-	}))
+	heartbeatDone := make(chan struct{})
+	heartbeatStopped := make(chan struct{})
+	go func() {
+		defer close(heartbeatStopped)
+		ticker := time.NewTicker(r.leaseHeartbeatInterval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-heartbeatDone:
+				return
+			case <-ticker.C:
+				progressMu.Lock()
+				if progressErr == nil {
+					if err := r.progressCallback(ctx, task, lastPhase, lastCompleted, cloneTotal(lastTotal)); err != nil {
+						progressErr = err
+						cancelExecution()
+					}
+				}
+				progressMu.Unlock()
+			}
+		}
+	}()
+	result := normalizeResult(r.executor.Execute(executionContext, task, reportProgress))
+	close(heartbeatDone)
+	<-heartbeatStopped
+	progressMu.Lock()
+	heartbeatErr := progressErr
+	progressMu.Unlock()
+	if heartbeatErr != nil {
+		if errors.Is(heartbeatErr, errTaskPauseRequested) || errors.Is(heartbeatErr, errTaskCancelRequested) {
+			result = controlledResult(heartbeatErr, lastPhase, envelopeDigest)
+		} else {
+			result = PrimitiveResult{
+				State: "paused_at_checkpoint", Outputs: map[string]any{}, EvidenceDigests: []string{},
+				Checkpoint: map[string]any{"phase": lastPhase, "envelope_digest": envelopeDigest, "reason": "lease_heartbeat_lost"},
+			}
+		}
+	}
 	completed := int64(1)
-	controlErr := r.progressCallback(ctx, task, "finalizing_result", completed, &completed)
+	controlErr := error(nil)
+	if heartbeatErr == nil {
+		controlErr = reportProgress("finalizing_result", completed, &completed)
+	}
 	if errors.Is(controlErr, errTaskPauseRequested) || errors.Is(controlErr, errTaskCancelRequested) {
 		result = controlledResult(controlErr, "finalizing_result", envelopeDigest)
 	}

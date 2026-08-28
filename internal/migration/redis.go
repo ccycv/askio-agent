@@ -39,6 +39,7 @@ const (
 	maximumRedisTrailerBytes    = 64 * 1024
 	maximumRedisArchiveBytes    = maximumRedisBytes + int64(maximumRedisKeys*23+maximumRedisTrailerBytes+len(redisArchiveMagic)+5)
 	redisExpiryTolerance        = int64(2_000)
+	redisMinimumRestoreTTL      = 30 * time.Second
 )
 
 var (
@@ -1295,7 +1296,13 @@ func (e *NativeExecutor) redisRestore(ctx context.Context, task TaskEnvelope, in
 	if err != nil {
 		return nil, err
 	}
-	trailer, err := readRedisArchive(artifactPath, binding, aclDigest, nil)
+	ttlCutoff := time.Now().Add(redisMinimumRestoreTTL).UnixMilli()
+	trailer, err := readRedisArchive(artifactPath, binding, aclDigest, func(record redisKeyRecord) error {
+		if record.ExpiryUnixMS != -1 && record.ExpiryUnixMS <= ttlCutoff {
+			return errors.New("Redis archive contains a volatile key too near expiry; create a fresh source snapshot")
+		}
+		return nil
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -1331,7 +1338,7 @@ func (e *NativeExecutor) redisRestore(ctx context.Context, task TaskEnvelope, in
 		arguments := []any{"RESTORE", record.Key, int64(0), record.Value}
 		if record.ExpiryUnixMS != -1 {
 			if record.ExpiryUnixMS <= time.Now().UnixMilli() {
-				return nil
+				return errors.New("Redis archive key expired during restore; create a fresh source snapshot")
 			}
 			arguments[2] = record.ExpiryUnixMS
 			arguments = append(arguments, "ABSTTL")
@@ -1360,7 +1367,7 @@ func (e *NativeExecutor) redisRestore(ctx context.Context, task TaskEnvelope, in
 		"database_manifest_digest": after.ManifestDigest, "dump_artifact_digest": artifactDigest,
 		"restored_size_bytes": size, "restored_key_count": restored, "verified_key_count": verified,
 		"persistent_key_count": trailer.PersistentRecordCount, "volatile_key_count": trailer.VolatileRecordCount,
-		"retry_reset_applied": retryResetApplied,
+		"retry_reset_applied": retryResetApplied, "ttl_safety_window_seconds": int64(redisMinimumRestoreTTL / time.Second),
 	}, nil
 }
 

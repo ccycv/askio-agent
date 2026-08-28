@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"sync"
 	"testing"
+	"time"
 )
 
 type fakeServiceController struct {
@@ -257,6 +258,34 @@ func TestWriterFenceWatchdogCompletesActivationWithoutInventingViolation(t *test
 	}
 }
 
+func TestWriterFenceWatchdogPersistsUnknownServiceStateAsBlockingEvidence(t *testing.T) {
+	controller := &fakeServiceController{
+		active: map[string]bool{"api.service": false, "worker.service": false}, failures: map[string]error{},
+		unknown: map[string]error{"api.service": errors.New("injected query failure")},
+	}
+	broker := writerFenceBroker(t, controller)
+	broker.state.WriterFences["migration-writer-fence-test"] = writerFenceState{
+		MigrationID: "migration-writer-fence-test", RunID: "run-writer-fence-test", Services: []string{"api.service", "worker.service"},
+		PreviouslyActive: []string{"api.service", "worker.service"}, Active: true, Phase: writerFenceActive, FencingToken: 22,
+	}
+
+	if err := broker.reconcileWriterFences(context.Background()); err == nil {
+		t.Fatal("watchdog enforcement failure was not reported")
+	}
+	fence := broker.state.WriterFences["migration-writer-fence-test"]
+	if fence.WatchdogErrorCount < 1 || fence.ViolationCount < 1 || fence.LastWatchdogError == "" || fence.LastViolation == "" {
+		t.Fatalf("watchdog enforcement failure was not retained: %#v", fence)
+	}
+	persisted := brokerPersistentState{}
+	reloaded := &Broker{config: broker.config, state: persisted}
+	if err := reloaded.loadFences(); err != nil {
+		t.Fatal(err)
+	}
+	if reloaded.state.WriterFences["migration-writer-fence-test"].WatchdogErrorCount < 1 {
+		t.Fatal("watchdog failure evidence did not survive reload")
+	}
+}
+
 func TestWriterFenceRejectsUnknownServiceStateBeforeMutation(t *testing.T) {
 	controller := &fakeServiceController{
 		active:   map[string]bool{"api.service": true, "worker.service": true},
@@ -269,5 +298,56 @@ func TestWriterFenceRejectsUnknownServiceStateBeforeMutation(t *testing.T) {
 	}
 	if len(broker.state.WriterFences) != 0 || !controller.active["api.service"] || !controller.active["worker.service"] {
 		t.Fatal("unknown service state caused a mutation")
+	}
+}
+
+func TestWriterFenceAttestationReconcilesAndReportsLiveFence(t *testing.T) {
+	controller := &fakeServiceController{
+		active:   map[string]bool{"api.service": false, "worker.service": false},
+		failures: map[string]error{},
+		unknown:  map[string]error{},
+	}
+	broker := writerFenceBroker(t, controller)
+	broker.state.WriterFences["migration-writer-fence-test"] = writerFenceState{
+		MigrationID: "migration-writer-fence-test", RunID: "run-writer-fence-test", Services: []string{"api.service", "worker.service"},
+		PreviouslyActive: []string{"api.service", "worker.service"}, Active: true, Phase: writerFenceActive, FencingToken: 55,
+		ActivatedAt: time.Now().UTC().Add(-time.Minute).Format(time.RFC3339Nano),
+	}
+
+	outputs, err := broker.attestWriterFences(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	fences, ok := outputs["fences"].([]WriterFenceAttestation)
+	if !ok || len(fences) != 1 {
+		t.Fatalf("live fence attestation was not emitted: %#v", outputs)
+	}
+	attestation := fences[0]
+	if !attestation.Active || attestation.Phase != writerFenceActive || attestation.FencingToken != 55 ||
+		attestation.LastVerifiedAt == "" || attestation.AttestedAt == "" || attestation.ViolationCount != 0 || attestation.WatchdogErrorCount != 0 {
+		t.Fatalf("live fence attestation was incomplete: %#v", attestation)
+	}
+}
+
+func TestWriterFenceAttestationFailsClosedOnWatchdogError(t *testing.T) {
+	controller := &fakeServiceController{
+		active:   map[string]bool{"api.service": false, "worker.service": false},
+		failures: map[string]error{},
+		unknown:  map[string]error{"api.service": errors.New("injected query failure")},
+	}
+	broker := writerFenceBroker(t, controller)
+	broker.state.WriterFences["migration-writer-fence-test"] = writerFenceState{
+		MigrationID: "migration-writer-fence-test", RunID: "run-writer-fence-test", Services: []string{"api.service", "worker.service"},
+		PreviouslyActive: []string{"api.service", "worker.service"}, Active: true, Phase: writerFenceActive, FencingToken: 56,
+		ActivatedAt: time.Now().UTC().Add(-time.Minute).Format(time.RFC3339Nano),
+	}
+
+	outputs, err := broker.attestWriterFences(context.Background())
+	if err == nil {
+		t.Fatal("watchdog failure was presented as a valid heartbeat attestation")
+	}
+	fences, ok := outputs["fences"].([]WriterFenceAttestation)
+	if !ok || len(fences) != 1 || fences[0].ViolationCount < 1 || fences[0].WatchdogErrorCount < 1 {
+		t.Fatalf("blocking watchdog evidence was not retained: %#v", outputs)
 	}
 }

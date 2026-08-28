@@ -84,9 +84,16 @@ func migrationCapabilities() []string {
 		"migration.checkpoint_resume.v1", "migration.validation.v1", "migration.evidence.v1",
 		"migration.cleanup.v1", "migration.maintenance.v1",
 		"migration.files_sync.v1", "migration.direct_mtls_chunks.v1",
-		"migration.postgres_offline.v1", "migration.postgres_logical.v1", "migration.mysql_offline.v1", "migration.mongodb_offline.v1",
+		"migration.postgres_offline.v1", "migration.postgres_logical.v1", "migration.mysql_offline.v1", "migration.mongodb_offline.v1", "migration.redis_offline.v1",
 		"migration.compose_isolation.v1", "migration.quiescence.v1",
 	}
+}
+
+func installHeartbeatIntervalSeconds(migrationEnabled bool) int {
+	if migrationEnabled {
+		return 10
+	}
+	return 30
 }
 
 func newMigrationEnrollmentCmd() *cobra.Command {
@@ -395,6 +402,7 @@ func newInstallCmd(logger *slog.Logger, cfgPath *string) *cobra.Command {
 			if migrationEnabled && (agentMode != "host" || priv == config.PrivilegeModeRoot || unitUser == "root") {
 				return fmt.Errorf("migration requires host mode, sudo privilege mode, and a non-root service user")
 			}
+			heartbeatIntervalSeconds := installHeartbeatIntervalSeconds(migrationEnabled)
 			cfg := config.Config{
 				Mode:                      agentMode,
 				APIURL:                    apiURL,
@@ -402,7 +410,7 @@ func newInstallCmd(logger *slog.Logger, cfgPath *string) *cobra.Command {
 				AgentID:                   agentID,
 				AgentToken:                token,
 				PrivilegeMode:             priv,
-				HeartbeatIntervalSeconds:  30,
+				HeartbeatIntervalSeconds:  heartbeatIntervalSeconds,
 				ConfigPollIntervalSeconds: 60,
 				LogLevel:                  "info",
 				DataDir:                   config.DefaultDataDir(),

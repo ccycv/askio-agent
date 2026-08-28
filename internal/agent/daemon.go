@@ -254,14 +254,7 @@ func (d *Daemon) postHeartbeat(ctx context.Context) error {
 			"mode": "typed_migration_broker", "requires_helper": false,
 			"command_run": false, "command_run_shell": false, "command_run_allowlist": []string{},
 		}
-		for _, capability := range []string{
-			"migration.security_profile.v1", "migration.discovery.v1", "migration.task_envelope.v1",
-			"migration.preflight.v1", "migration.files_manifest.v1", "migration.compose_inspect.v1",
-			"migration.checkpoint_resume.v1", "migration.validation.v1", "migration.evidence.v1",
-			"migration.cleanup.v1", "migration.maintenance.v1", "migration.postgres_offline.v1", "migration.postgres_logical.v1",
-			"migration.mysql_offline.v1", "migration.mongodb_offline.v1", "migration.redis_offline.v1",
-			"migration.compose_isolation.v1", "migration.quiescence.v1",
-		} {
+		for _, capability := range migrationCapabilities() {
 			reportedCapabilities[capability] = true
 		}
 		if d.migrationDataPlane != nil {
@@ -313,6 +306,17 @@ func (d *Daemon) postHeartbeat(ctx context.Context) error {
 		"os_info":               detectOS(),
 		"detected_capabilities": caps,
 		"capabilities":          reportedCapabilities,
+	}
+	if d.migrationRunner != nil {
+		attestationContext, cancel := context.WithTimeout(ctx, 8*time.Second)
+		attestations, err := d.migrationRunner.WriterFenceAttestations(attestationContext)
+		cancel()
+		if err != nil {
+			d.logger.Warn("writer-fence heartbeat attestation failed closed", "err", err)
+			payload["migration_writer_fences"] = []migration.WriterFenceAttestation{}
+		} else {
+			payload["migration_writer_fences"] = attestations
+		}
 	}
 
 	ctx2, cancel := context.WithTimeout(ctx, 8*time.Second)

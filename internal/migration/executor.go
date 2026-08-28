@@ -101,6 +101,12 @@ func (e *NativeExecutor) SetLogger(logger *slog.Logger) {
 	e.logger = logger
 }
 
+func (e *NativeExecutor) WriterFenceAttestations(ctx context.Context) ([]WriterFenceAttestation, error) {
+	attestationContext, cancel := context.WithTimeout(ctx, 8*time.Second)
+	defer cancel()
+	return e.broker.AttestWriterFences(attestationContext)
+}
+
 func (e *NativeExecutor) ConfigureDataPlaneIdentity(agentID, backendKeyID, backendPublicKeyBase64 string, identity *Identity) error {
 	if agentID == "" || backendKeyID == "" || identity == nil {
 		return errors.New("migration data-plane identity is incomplete")

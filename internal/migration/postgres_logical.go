@@ -173,18 +173,234 @@ func postgresLogicalObjectNames(migrationID, sourceDatabase string) (postgresLog
 }
 
 type postgresLogicalMarker struct {
-	SchemaVersion     string               `json:"schema_version"`
-	MigrationID       string               `json:"migration_id"`
-	PlanDigest        string               `json:"plan_digest"`
-	EndpointRole      string               `json:"endpoint_role"`
-	DatabaseBindingID string               `json:"database_binding_id"`
-	LogicalBindingID  string               `json:"logical_binding_id,omitempty"`
-	Database          string               `json:"database"`
-	Names             postgresLogicalNames `json:"names"`
-	SchemaDigest      string               `json:"schema_digest,omitempty"`
-	FinalStateDigest  string               `json:"final_state_digest,omitempty"`
-	Status            string               `json:"status"`
-	UpdatedAt         string               `json:"updated_at"`
+	SchemaVersion                string               `json:"schema_version"`
+	MigrationID                  string               `json:"migration_id"`
+	PlanDigest                   string               `json:"plan_digest"`
+	EndpointRole                 string               `json:"endpoint_role"`
+	DatabaseBindingID            string               `json:"database_binding_id"`
+	LogicalBindingID             string               `json:"logical_binding_id,omitempty"`
+	Database                     string               `json:"database"`
+	Names                        postgresLogicalNames `json:"names"`
+	SchemaDigest                 string               `json:"schema_digest,omitempty"`
+	PublicationOwner             string               `json:"publication_owner,omitempty"`
+	SubscriptionOwner            string               `json:"subscription_owner,omitempty"`
+	PublicationDefinitionDigest  string               `json:"publication_definition_digest,omitempty"`
+	SubscriptionDefinitionDigest string               `json:"subscription_definition_digest,omitempty"`
+	FinalStateDigest             string               `json:"final_state_digest,omitempty"`
+	Status                       string               `json:"status"`
+	UpdatedAt                    string               `json:"updated_at"`
+}
+
+func postgresLogicalCatalogOwner(ctx context.Context, e *NativeExecutor, binding postgresBinding) (string, error) {
+	rows, err := e.queryPostgres(ctx, binding, binding.Database, "select current_user")
+	if err != nil || len(rows) != 1 || len(rows[0]) != 1 || invalidCatalogIdentifier(rows[0][0]) {
+		return "", errors.New("PostgreSQL logical catalog owner is invalid")
+	}
+	return rows[0][0], nil
+}
+
+func postgresLogicalServerMajor(ctx context.Context, e *NativeExecutor, binding postgresBinding) (int, error) {
+	rows, err := e.queryPostgres(ctx, binding, binding.Database, "show server_version_num")
+	version, parseErr := parseSingleInt(rows)
+	major := int(version / 10000)
+	if err != nil || parseErr != nil || major < 14 || major > 17 {
+		return 0, errors.New("PostgreSQL logical server version is unsupported")
+	}
+	return major, nil
+}
+
+func postgresCatalogBool(value string) (bool, error) {
+	switch value {
+	case "t", "true":
+		return true, nil
+	case "f", "false":
+		return false, nil
+	default:
+		return false, errors.New("PostgreSQL catalog boolean is invalid")
+	}
+}
+
+func postgresSubscriptionStreamingMode(value string) (string, error) {
+	switch value {
+	case "t", "true", "on":
+		return "on", nil
+	case "f", "false", "off":
+		return "off", nil
+	case "p", "parallel":
+		return "parallel", nil
+	default:
+		return "", errors.New("PostgreSQL subscription streaming mode is invalid")
+	}
+}
+
+func (e *NativeExecutor) postgresLogicalPublicationDefinitionDigests(ctx context.Context, binding postgresBinding, names postgresLogicalNames, expectedOwner string) (string, string, error) {
+	if invalidCatalogIdentifier(expectedOwner) {
+		return "", "", errors.New("PostgreSQL publication expected owner is invalid")
+	}
+	major, err := postgresLogicalServerMajor(ctx, e, binding)
+	if err != nil {
+		return "", "", err
+	}
+	expectedTableQuery := "select n.nspname,c.relname from pg_class c join pg_namespace n on n.oid=c.relnamespace where c.relkind='r' and n.nspname not in('pg_catalog','information_schema') and n.nspname !~ '^pg_toast' order by n.nspname,c.relname"
+	actualTableQuery := "select schemaname,tablename from pg_publication_tables where pubname=" + quotePostgresLiteral(names.Publication) + " order by schemaname,tablename"
+	if major >= 15 {
+		expectedTableQuery = "select n.nspname,c.relname,array_to_json(array_agg(a.attname order by a.attnum))::text,'' from pg_class c join pg_namespace n on n.oid=c.relnamespace join pg_attribute a on a.attrelid=c.oid and a.attnum>0 and not a.attisdropped where c.relkind='r' and n.nspname not in('pg_catalog','information_schema') and n.nspname !~ '^pg_toast' group by n.nspname,c.relname order by n.nspname,c.relname"
+		actualTableQuery = "select schemaname,tablename,array_to_json(attnames)::text,coalesce(rowfilter,'') from pg_publication_tables where pubname=" + quotePostgresLiteral(names.Publication) + " order by schemaname,tablename"
+	}
+	expectedRows, err := e.queryPostgres(ctx, binding, binding.Database, expectedTableQuery)
+	if err != nil || len(expectedRows) < 1 || len(expectedRows) > 2048 {
+		return "", "", errors.New("PostgreSQL publication expected table inventory is invalid")
+	}
+	actualSettings, err := e.queryPostgres(ctx, binding, binding.Database,
+		"select pg_get_userbyid(pubowner),puballtables::text,pubinsert::text,pubupdate::text,pubdelete::text,pubtruncate::text,pubviaroot::text from pg_publication where pubname="+quotePostgresLiteral(names.Publication))
+	if err != nil || len(actualSettings) != 1 || len(actualSettings[0]) != 7 || invalidCatalogIdentifier(actualSettings[0][0]) {
+		return "", "", errors.New("PostgreSQL publication definition is unavailable")
+	}
+	actualBooleans := make([]bool, 6)
+	for index, value := range actualSettings[0][1:] {
+		parsed, parseErr := postgresCatalogBool(value)
+		if parseErr != nil {
+			return "", "", parseErr
+		}
+		actualBooleans[index] = parsed
+	}
+	actualRows, err := e.queryPostgres(ctx, binding, binding.Database, actualTableQuery)
+	if err != nil {
+		return "", "", errors.New("PostgreSQL publication table definition is unavailable")
+	}
+	for _, rows := range [][][]string{expectedRows, actualRows} {
+		for _, row := range rows {
+			if len(row) != len(expectedRows[0]) || invalidCatalogIdentifier(row[0]) || invalidCatalogIdentifier(row[1]) {
+				return "", "", errors.New("PostgreSQL publication table definition is invalid")
+			}
+		}
+	}
+	expected, err := Digest(map[string]any{
+		"schema_version": "operations.migration.postgres-publication-definition.v1", "owner": expectedOwner,
+		"all_tables":     false,
+		"publish_insert": true, "publish_update": true, "publish_delete": true, "publish_truncate": true,
+		"publish_via_partition_root": false, "server_major": major, "tables": expectedRows,
+	})
+	if err != nil {
+		return "", "", err
+	}
+	actual, err := Digest(map[string]any{
+		"schema_version": "operations.migration.postgres-publication-definition.v1", "owner": actualSettings[0][0],
+		"all_tables": actualBooleans[0], "publish_insert": actualBooleans[1], "publish_update": actualBooleans[2],
+		"publish_delete": actualBooleans[3], "publish_truncate": actualBooleans[4],
+		"publish_via_partition_root": actualBooleans[5], "server_major": major, "tables": actualRows,
+	})
+	return expected, actual, err
+}
+
+func (e *NativeExecutor) postgresLogicalSubscriptionDefinitionDigests(ctx context.Context, target postgresBinding, logical postgresLogicalSourceBinding, names postgresLogicalNames, expectedOwner string) (string, string, error) {
+	if invalidCatalogIdentifier(expectedOwner) {
+		return "", "", errors.New("PostgreSQL subscription expected owner is invalid")
+	}
+	major, err := postgresLogicalServerMajor(ctx, e, target)
+	if err != nil {
+		return "", "", err
+	}
+	columns := "pg_get_userbyid(subowner),subenabled::text,coalesce(subslotname,''),array_to_string(subpublications,','),subbinary::text,substream::text,subsynccommit,subconninfo"
+	if major >= 15 {
+		columns += ",subtwophasestate::text,subdisableonerr::text"
+	}
+	if major >= 16 {
+		columns += ",subpasswordrequired::text,subrunasowner::text,suborigin"
+	}
+	if major >= 17 {
+		columns += ",subfailover::text"
+	}
+	rows, err := e.queryPostgres(ctx, target, target.Database,
+		"select "+columns+" from pg_subscription where subname="+quotePostgresLiteral(names.Subscription))
+	expectedColumns := 8
+	if major >= 15 {
+		expectedColumns += 2
+	}
+	if major >= 16 {
+		expectedColumns += 3
+	}
+	if major >= 17 {
+		expectedColumns++
+	}
+	if err != nil || len(rows) != 1 || len(rows[0]) != expectedColumns || invalidCatalogIdentifier(rows[0][0]) {
+		return "", "", errors.New("PostgreSQL subscription definition is unavailable")
+	}
+	enabled, enabledErr := postgresCatalogBool(rows[0][1])
+	binary, binaryErr := postgresCatalogBool(rows[0][4])
+	streaming, streamingErr := postgresSubscriptionStreamingMode(rows[0][5])
+	if enabledErr != nil || binaryErr != nil || streamingErr != nil {
+		return "", "", errors.New("PostgreSQL subscription boolean definition is invalid")
+	}
+	expectedConninfo := postgresLogicalConninfo(logical)
+	if rows[0][2] != names.Slot {
+		return "", "", errors.New("PostgreSQL subscription slot differs from the approved slot")
+	}
+	if rows[0][3] != names.Publication {
+		return "", "", errors.New("PostgreSQL subscription publication differs from the approved publication")
+	}
+	if binary {
+		return "", "", errors.New("PostgreSQL subscription binary mode differs from the approved mode")
+	}
+	if streaming != "on" {
+		return "", "", errors.New("PostgreSQL subscription streaming mode differs from the approved mode")
+	}
+	if rows[0][6] != "off" {
+		return "", "", errors.New("PostgreSQL subscription synchronous commit differs from the approved mode")
+	}
+	if rows[0][7] != expectedConninfo {
+		return "", "", errors.New("PostgreSQL subscription connection differs from the approved source binding")
+	}
+	extraExpected := map[string]any{}
+	extraActual := map[string]any{}
+	if major >= 15 {
+		disableOnError, parseErr := postgresCatalogBool(rows[0][9])
+		if rows[0][8] != "d" || parseErr != nil || !disableOnError {
+			return "", "", errors.New("PostgreSQL subscription two-phase or disable-on-error safety differs from the approved mode")
+		}
+		extraExpected["two_phase_state"] = "d"
+		extraExpected["disable_on_error"] = true
+		extraActual["two_phase_state"] = rows[0][8]
+		extraActual["disable_on_error"] = disableOnError
+	}
+	if major >= 16 {
+		passwordRequired, passwordErr := postgresCatalogBool(rows[0][10])
+		runAsOwner, ownerErr := postgresCatalogBool(rows[0][11])
+		if passwordErr != nil || ownerErr != nil || !passwordRequired || runAsOwner || rows[0][12] != "none" {
+			return "", "", errors.New("PostgreSQL subscription authentication or origin safety differs from the approved mode")
+		}
+		extraExpected["password_required"] = true
+		extraExpected["run_as_owner"] = false
+		extraExpected["origin"] = "none"
+		extraActual["password_required"] = passwordRequired
+		extraActual["run_as_owner"] = runAsOwner
+		extraActual["origin"] = rows[0][12]
+	}
+	if major >= 17 {
+		failover, parseErr := postgresCatalogBool(rows[0][13])
+		if parseErr != nil || failover {
+			return "", "", errors.New("PostgreSQL subscription failover mode differs from the approved mode")
+		}
+		extraExpected["failover"] = false
+		extraActual["failover"] = failover
+	}
+	expected, err := Digest(map[string]any{
+		"schema_version": "operations.migration.postgres-subscription-definition.v1", "owner": expectedOwner,
+		"slot": names.Slot, "publications": names.Publication, "binary": false,
+		"streaming": "on", "synchronous_commit": "off", "connection": expectedConninfo,
+		"server_major": major, "safety": extraExpected,
+	})
+	if err != nil {
+		return "", "", err
+	}
+	actual, err := Digest(map[string]any{
+		"schema_version": "operations.migration.postgres-subscription-definition.v1", "owner": rows[0][0],
+		"slot": rows[0][2], "publications": rows[0][3],
+		"binary": binary, "streaming": streaming, "synchronous_commit": rows[0][6],
+		"connection": rows[0][7], "server_major": major, "safety": extraActual,
+	})
+	_ = enabled
+	return expected, actual, err
 }
 
 func taskPlanDigest(task TaskEnvelope) string {
@@ -646,9 +862,16 @@ func (e *NativeExecutor) postgresLogicalRestoreSchema(ctx context.Context, task 
 	if err != nil {
 		return nil, err
 	}
+	subscriptionOwner, err := postgresLogicalCatalogOwner(ctx, e, binding)
+	if err != nil {
+		return nil, err
+	}
 	if existing, markerErr := e.loadPostgresLogicalMarker(bindingID, "target"); markerErr == nil {
 		if err := validatePostgresLogicalMarker(existing, task, bindingID, logicalBindingID, "target", binding.Database, names); err != nil {
 			return nil, err
+		}
+		if existing.SubscriptionOwner != subscriptionOwner {
+			return nil, errors.New("marked PostgreSQL logical subscription owner changed")
 		}
 		current, currentDigest, err := e.dumpPostgresLogicalSchema(ctx, binding, eligibility.ServerMajor)
 		zeroBytes(current)
@@ -682,7 +905,7 @@ func (e *NativeExecutor) postgresLogicalRestoreSchema(ctx context.Context, task 
 	marker := postgresLogicalMarker{
 		MigrationID: task.MigrationID, PlanDigest: taskPlanDigest(task), DatabaseBindingID: bindingID,
 		LogicalBindingID: logicalBindingID, Database: binding.Database, Names: names,
-		SchemaDigest: expectedDigest, Status: "schema-restored",
+		SchemaDigest: expectedDigest, SubscriptionOwner: subscriptionOwner, Status: "schema-restored",
 	}
 	if err := e.savePostgresLogicalMarker(bindingID, "target", marker); err != nil {
 		return nil, err
@@ -715,6 +938,10 @@ func (e *NativeExecutor) postgresLogicalPrepareSource(ctx context.Context, task 
 	if err != nil {
 		return nil, err
 	}
+	publicationOwner, err := postgresLogicalCatalogOwner(ctx, e, binding)
+	if err != nil {
+		return nil, err
+	}
 	expectedSchemaDigest, err := stringInput(inputs, "expected_schema_digest")
 	if err != nil || !fileDigestPattern.MatchString(expectedSchemaDigest) {
 		return nil, errors.New("expected PostgreSQL logical schema digest is invalid")
@@ -741,12 +968,16 @@ func (e *NativeExecutor) postgresLogicalPrepareSource(ctx context.Context, task 
 		if marker.SchemaDigest != expectedSchemaDigest {
 			return nil, errors.New("marked PostgreSQL source schema digest changed")
 		}
+		if marker.PublicationOwner != publicationOwner {
+			return nil, errors.New("marked PostgreSQL logical publication owner changed")
+		}
 	} else if publicationCount != 0 || slotCount != 0 {
 		return nil, errors.New("PostgreSQL logical object exists without Askio ownership")
 	} else {
 		marker = postgresLogicalMarker{
 			MigrationID: task.MigrationID, PlanDigest: taskPlanDigest(task), DatabaseBindingID: bindingID,
-			Database: binding.Database, Names: names, SchemaDigest: expectedSchemaDigest, Status: "preparing",
+			Database: binding.Database, Names: names, SchemaDigest: expectedSchemaDigest,
+			PublicationOwner: publicationOwner, Status: "preparing",
 		}
 		if err := e.savePostgresLogicalMarker(bindingID, "source", marker); err != nil {
 			return nil, err
@@ -771,6 +1002,14 @@ func (e *NativeExecutor) postgresLogicalPrepareSource(ctx context.Context, task 
 			return nil, errors.New("PostgreSQL logical publication creation failed")
 		}
 	}
+	expectedPublicationDigest, actualPublicationDigest, err := e.postgresLogicalPublicationDefinitionDigests(ctx, binding, names, publicationOwner)
+	if err != nil || expectedPublicationDigest != actualPublicationDigest {
+		return nil, errors.New("PostgreSQL logical publication definition drifted from the approved table set")
+	}
+	if marker.PublicationDefinitionDigest != "" && marker.PublicationDefinitionDigest != actualPublicationDigest {
+		return nil, errors.New("marked PostgreSQL logical publication definition changed")
+	}
+	marker.PublicationDefinitionDigest = actualPublicationDigest
 	marker.Status = "publication-ready"
 	if err := e.savePostgresLogicalMarker(bindingID, "source", marker); err != nil {
 		return nil, err
@@ -778,6 +1017,7 @@ func (e *NativeExecutor) postgresLogicalPrepareSource(ctx context.Context, task 
 	return map[string]any{
 		"prepared": true, "publication_name": names.Publication, "slot_name": names.Slot,
 		"schema_digest": expectedSchemaDigest, "table_count": eligibility.TableCount,
+		"publication_owner": publicationOwner, "publication_definition_digest": actualPublicationDigest,
 	}, nil
 }
 
@@ -798,24 +1038,24 @@ func postgresLogicalConninfo(binding postgresLogicalSourceBinding) string {
 	return strings.Join(parts, " ")
 }
 
-func (e *NativeExecutor) postgresLogicalSlotWALBytes(ctx context.Context, binding postgresBinding, slot string) (int64, bool, error) {
+func (e *NativeExecutor) postgresLogicalSlotWALBytes(ctx context.Context, binding postgresBinding, slot string) (int64, bool, bool, error) {
 	rows, err := e.queryPostgres(ctx, binding, binding.Database,
 		"select coalesce(pg_wal_lsn_diff(pg_current_wal_lsn(),restart_lsn),0)::bigint::text,active::text from pg_replication_slots where slot_name="+quotePostgresLiteral(slot))
 	if err != nil {
-		return 0, false, err
+		return 0, false, false, err
 	}
 	if len(rows) == 0 {
-		return 0, false, nil
+		return 0, false, false, nil
 	}
 	if len(rows) != 1 || len(rows[0]) != 2 {
-		return 0, false, errors.New("PostgreSQL logical slot inventory is invalid")
+		return 0, false, false, errors.New("PostgreSQL logical slot inventory is invalid")
 	}
 	value, err := strconv.ParseInt(rows[0][0], 10, 64)
 	active, activeErr := postgresBool([][]string{{rows[0][1]}})
 	if err != nil || value < 0 || activeErr != nil {
-		return 0, false, errors.New("PostgreSQL logical slot state is invalid")
+		return 0, false, false, errors.New("PostgreSQL logical slot state is invalid")
 	}
-	return value, active, nil
+	return value, active, true, nil
 }
 
 func postgresLogicalAppliedLSNQuery(subscription, lsn string) string {
@@ -828,6 +1068,7 @@ func postgresLogicalAppliedLSNQuery(subscription, lsn string) string {
 
 func (e *NativeExecutor) waitPostgresLogicalApply(ctx context.Context, target postgresBinding, source postgresBinding, names postgresLogicalNames, contract postgresLogicalContract, requireTablesReady bool) (string, int64, error) {
 	deadline := time.Now().Add(time.Duration(contract.MaximumCatchupSeconds) * time.Second)
+	var inactiveSince time.Time
 	for {
 		lsnRows, err := e.queryPostgres(ctx, source, source.Database, "select pg_current_wal_lsn()::text")
 		if err != nil || len(lsnRows) != 1 || len(lsnRows[0]) != 1 || !postgresLSNPattern.MatchString(lsnRows[0][0]) {
@@ -846,9 +1087,21 @@ func (e *NativeExecutor) waitPostgresLogicalApply(ctx context.Context, target po
 		applyRows, err := e.queryPostgres(ctx, target, target.Database,
 			postgresLogicalAppliedLSNQuery(names.Subscription, sourceLSN))
 		applied, applyParseErr := postgresBool(applyRows)
-		walBytes, _, walErr := e.postgresLogicalSlotWALBytes(ctx, source, names.Slot)
+		walBytes, active, exists, walErr := e.postgresLogicalSlotWALBytes(ctx, source, names.Slot)
 		if err != nil || applyParseErr != nil || walErr != nil {
 			return "", 0, errors.New("PostgreSQL logical catch-up inspection failed")
+		}
+		if !exists {
+			return "", 0, errors.New("PostgreSQL logical slot disappeared during catch-up")
+		}
+		if !active {
+			if inactiveSince.IsZero() {
+				inactiveSince = time.Now()
+			} else if time.Since(inactiveSince) > 10*time.Second {
+				return "", walBytes, errors.New("PostgreSQL logical slot remained inactive during catch-up")
+			}
+		} else {
+			inactiveSince = time.Time{}
 		}
 		if walBytes > contract.MaximumSlotWALBytes {
 			return "", walBytes, errors.New("PostgreSQL logical slot exceeded the approved WAL retention ceiling")
@@ -906,19 +1159,42 @@ func (e *NativeExecutor) postgresLogicalStartSubscription(ctx context.Context, t
 	if err != nil || marker.SchemaDigest != expectedSchemaDigest {
 		return nil, errors.New("PostgreSQL logical target schema digest changed")
 	}
+	approvedPublicationOwner, err := stringInput(inputs, "expected_publication_owner")
+	if err != nil || invalidCatalogIdentifier(approvedPublicationOwner) {
+		return nil, errors.New("approved PostgreSQL logical publication owner is invalid")
+	}
+	if invalidCatalogIdentifier(marker.SubscriptionOwner) {
+		return nil, errors.New("PostgreSQL logical subscription owner is unproven")
+	}
+	targetMajor, err := postgresLogicalServerMajor(ctx, e, target)
+	if err != nil {
+		return nil, err
+	}
 	publicationRows, err := e.queryPostgres(ctx, source, source.Database,
 		"select count(*) from pg_publication where pubname="+quotePostgresLiteral(names.Publication))
 	publicationCount, publicationParseErr := parseSingleInt(publicationRows)
 	if err != nil || publicationParseErr != nil || publicationCount != 1 {
 		return nil, errors.New("marked PostgreSQL logical publication is unavailable")
 	}
+	expectedPublicationDigest, actualPublicationDigest, err := e.postgresLogicalPublicationDefinitionDigests(ctx, source, names, approvedPublicationOwner)
+	if err != nil || expectedPublicationDigest != actualPublicationDigest {
+		return nil, errors.New("marked PostgreSQL logical publication definition drifted")
+	}
+	approvedPublicationDigest, err := stringInput(inputs, "expected_publication_definition_digest")
+	if err != nil || approvedPublicationDigest != actualPublicationDigest {
+		return nil, errors.New("marked PostgreSQL logical publication does not match the approved source definition")
+	}
 	subscriptionRows, err := e.queryPostgres(ctx, target, target.Database,
-		"select subslotname,array_to_string(subpublications,',') from pg_subscription where subname="+quotePostgresLiteral(names.Subscription))
+		"select subenabled::text,subslotname,array_to_string(subpublications,',') from pg_subscription where subname="+quotePostgresLiteral(names.Subscription))
 	if err != nil || len(subscriptionRows) > 1 {
 		return nil, errors.New("PostgreSQL logical subscription inventory is invalid")
 	}
 	if len(subscriptionRows) == 1 {
-		if len(subscriptionRows[0]) != 2 || subscriptionRows[0][0] != names.Slot || subscriptionRows[0][1] != names.Publication {
+		if len(subscriptionRows[0]) != 3 {
+			return nil, errors.New("existing PostgreSQL logical subscription is not owned by this plan")
+		}
+		enabled, enabledErr := postgresCatalogBool(subscriptionRows[0][0])
+		if enabledErr != nil || !enabled || subscriptionRows[0][1] != names.Slot || subscriptionRows[0][2] != names.Publication {
 			return nil, errors.New("existing PostgreSQL logical subscription is not owned by this plan")
 		}
 	} else {
@@ -928,7 +1204,7 @@ func (e *NativeExecutor) postgresLogicalStartSubscription(ctx context.Context, t
 		if err != nil || slotParseErr != nil || slotCount > 1 {
 			return nil, errors.New("PostgreSQL logical slot inventory is invalid")
 		}
-		walBytes, active, err := e.postgresLogicalSlotWALBytes(ctx, source, names.Slot)
+		walBytes, active, exists, err := e.postgresLogicalSlotWALBytes(ctx, source, names.Slot)
 		if err != nil {
 			return nil, err
 		}
@@ -936,6 +1212,9 @@ func (e *NativeExecutor) postgresLogicalStartSubscription(ctx context.Context, t
 			return nil, errors.New("PostgreSQL logical slot exceeded the approved WAL retention ceiling")
 		}
 		if slotCount == 1 {
+			if !exists {
+				return nil, errors.New("marked PostgreSQL logical slot disappeared")
+			}
 			if active {
 				return nil, errors.New("marked PostgreSQL logical slot is unexpectedly active")
 			}
@@ -945,10 +1224,19 @@ func (e *NativeExecutor) postgresLogicalStartSubscription(ctx context.Context, t
 			}
 		}
 		conninfo := postgresLogicalConninfo(logicalBinding)
+		options := "copy_data=true,create_slot=true,enabled=true,slot_name=" + quotePostgresLiteral(names.Slot) + ",binary=false,streaming=on,synchronous_commit=off"
+		if targetMajor >= 15 {
+			options += ",two_phase=false,disable_on_error=true"
+		}
+		if targetMajor >= 16 {
+			options += ",password_required=true,run_as_owner=false,origin=none"
+		}
+		if targetMajor >= 17 {
+			options += ",failover=false"
+		}
 		sql := "set log_statement='none'; set log_min_duration_statement=-1; set log_min_error_statement='panic';\n" +
 			"create subscription " + quotePostgresIdentifier(names.Subscription) + " connection " + quotePostgresLiteral(conninfo) +
-			" publication " + quotePostgresIdentifier(names.Publication) + " with (copy_data=true,create_slot=true,enabled=true,slot_name=" +
-			quotePostgresLiteral(names.Slot) + ",binary=false,streaming=on,synchronous_commit=off);\n"
+			" publication " + quotePostgresIdentifier(names.Publication) + " with (" + options + ");\n"
 		psql, err := fixedPostgresExecutable("psql")
 		if err != nil {
 			zeroBytes([]byte(conninfo))
@@ -968,6 +1256,23 @@ func (e *NativeExecutor) postgresLogicalStartSubscription(ctx context.Context, t
 			return nil, err
 		}
 	}
+	expectedSubscriptionDigest, actualSubscriptionDigest, err := e.postgresLogicalSubscriptionDefinitionDigests(ctx, target, logicalBinding, names, marker.SubscriptionOwner)
+	if err != nil {
+		return nil, err
+	}
+	if expectedSubscriptionDigest != actualSubscriptionDigest {
+		return nil, errors.New("PostgreSQL logical subscription definition drifted from the approved connection")
+	}
+	if marker.SubscriptionDefinitionDigest != "" && marker.SubscriptionDefinitionDigest != actualSubscriptionDigest {
+		return nil, errors.New("marked PostgreSQL logical subscription definition changed")
+	}
+	marker.PublicationDefinitionDigest = actualPublicationDigest
+	marker.PublicationOwner = approvedPublicationOwner
+	marker.SubscriptionDefinitionDigest = actualSubscriptionDigest
+	marker.Status = "subscription-created"
+	if err := e.savePostgresLogicalMarker(bindingID, "target", marker); err != nil {
+		return nil, err
+	}
 	if err := progress("postgres_logical_initial_copy", 0, nil); err != nil {
 		return nil, err
 	}
@@ -985,6 +1290,7 @@ func (e *NativeExecutor) postgresLogicalStartSubscription(ctx context.Context, t
 	return map[string]any{
 		"replicating": true, "publication_name": names.Publication, "slot_name": names.Slot,
 		"subscription_name": names.Subscription, "caught_up_lsn": lsn, "retained_wal_bytes": walBytes,
+		"publication_definition_digest": actualPublicationDigest, "subscription_definition_digest": actualSubscriptionDigest,
 	}, nil
 }
 
@@ -1047,6 +1353,10 @@ func (e *NativeExecutor) postgresLogicalFinalizeSource(ctx context.Context, task
 	marker, err := e.loadPostgresLogicalMarker(bindingID, "source")
 	if err != nil || validatePostgresLogicalMarker(marker, task, bindingID, "", "source", binding.Database, names) != nil {
 		return nil, errors.New("PostgreSQL logical source ownership is unproven")
+	}
+	expectedPublicationDigest, actualPublicationDigest, err := e.postgresLogicalPublicationDefinitionDigests(ctx, binding, names, marker.PublicationOwner)
+	if err != nil || expectedPublicationDigest != actualPublicationDigest || marker.PublicationDefinitionDigest != actualPublicationDigest {
+		return nil, errors.New("PostgreSQL logical publication definition changed before finalization")
 	}
 	eligibility, err := e.inspectPostgresLogicalEligibility(ctx, binding, contract, true, false)
 	if err != nil {
@@ -1117,13 +1427,26 @@ func (e *NativeExecutor) postgresLogicalFinalizeSource(ctx context.Context, task
 
 func (e *NativeExecutor) waitPostgresLogicalFinalLSN(ctx context.Context, target, source postgresBinding, names postgresLogicalNames, contract postgresLogicalContract, finalLSN string) (int64, error) {
 	deadline := time.Now().Add(time.Duration(contract.MaximumCatchupSeconds) * time.Second)
+	var inactiveSince time.Time
 	for {
 		applyRows, err := e.queryPostgres(ctx, target, target.Database,
 			postgresLogicalAppliedLSNQuery(names.Subscription, finalLSN))
 		applied, applyErr := postgresBool(applyRows)
-		walBytes, _, walErr := e.postgresLogicalSlotWALBytes(ctx, source, names.Slot)
+		walBytes, active, exists, walErr := e.postgresLogicalSlotWALBytes(ctx, source, names.Slot)
 		if err != nil || applyErr != nil || walErr != nil {
 			return 0, errors.New("PostgreSQL final logical catch-up inspection failed")
+		}
+		if !exists {
+			return 0, errors.New("PostgreSQL logical slot disappeared during final catch-up")
+		}
+		if !active {
+			if inactiveSince.IsZero() {
+				inactiveSince = time.Now()
+			} else if time.Since(inactiveSince) > 10*time.Second {
+				return walBytes, errors.New("PostgreSQL logical slot remained inactive during final catch-up")
+			}
+		} else {
+			inactiveSince = time.Time{}
 		}
 		if walBytes > contract.MaximumSlotWALBytes {
 			return walBytes, errors.New("PostgreSQL logical slot exceeded the approved WAL retention ceiling")
@@ -1234,10 +1557,76 @@ func (e *NativeExecutor) postgresLogicalFinalizeTarget(ctx context.Context, task
 	if state.SchemaDigest != marker.SchemaDigest {
 		return nil, errors.New("PostgreSQL logical final-state schema digest changed")
 	}
+	if marker.Status == "target-finalized" && marker.FinalStateDigest == expectedDigest {
+		inspection, inspectErr := e.inspectPostgres(ctx, bindingID, target)
+		if inspectErr != nil || inspection.ManifestDigest != state.ManifestDigest {
+			return nil, errors.New("finalized PostgreSQL logical target drifted")
+		}
+		return map[string]any{
+			"verified": true, "database_manifest_digest": inspection.ManifestDigest,
+			"final_state_artifact_digest": expectedDigest, "final_lsn": state.FinalLSN,
+			"retained_wal_bytes": int64(0), "subscription_detached": true, "idempotent": true,
+		}, nil
+	}
 	subscriptionRows, err := e.queryPostgres(ctx, target, target.Database,
-		"select subenabled::text,coalesce(subslotname,'') from pg_subscription where subname="+quotePostgresLiteral(names.Subscription))
-	if err != nil || len(subscriptionRows) != 1 || len(subscriptionRows[0]) != 2 || subscriptionRows[0][1] != names.Slot {
+		"select subenabled::text,coalesce(subslotname,''),pg_get_userbyid(subowner) from pg_subscription where subname="+quotePostgresLiteral(names.Subscription))
+	if err != nil || len(subscriptionRows) > 1 || (len(subscriptionRows) == 1 && len(subscriptionRows[0]) != 3) {
 		return nil, errors.New("marked PostgreSQL logical subscription is unavailable")
+	}
+	cleanupPending := marker.Status == "target-finalization-cleanup-pending" && marker.FinalStateDigest == expectedDigest
+	if cleanupPending {
+		inspection, inspectErr := e.inspectPostgres(ctx, bindingID, target)
+		if inspectErr != nil || inspection.ManifestDigest != state.ManifestDigest {
+			return nil, errors.New("PostgreSQL logical target drifted during finalization recovery")
+		}
+		if len(subscriptionRows) == 1 {
+			enabled, enabledErr := postgresBool([][]string{{subscriptionRows[0][0]}})
+			if enabledErr != nil {
+				return nil, errors.New("PostgreSQL logical subscription state is invalid during recovery")
+			}
+			if enabled {
+				if _, err := e.queryPostgres(ctx, target, target.Database,
+					"alter subscription "+quotePostgresIdentifier(names.Subscription)+" disable"); err != nil {
+					return nil, errors.New("PostgreSQL logical subscription could not be disabled during recovery")
+				}
+			}
+			if err := e.waitPostgresSubscriptionWorkerStopped(ctx, target, names.Subscription, contract.MaximumCatchupSeconds); err != nil {
+				return nil, err
+			}
+			if subscriptionRows[0][1] != "" {
+				if subscriptionRows[0][1] != names.Slot {
+					return nil, errors.New("PostgreSQL logical subscription slot changed during finalization recovery")
+				}
+				if _, err := e.queryPostgres(ctx, target, target.Database,
+					"alter subscription "+quotePostgresIdentifier(names.Subscription)+" set (slot_name=none)"); err != nil {
+					return nil, errors.New("PostgreSQL logical subscription could not detach its slot during recovery")
+				}
+			}
+			if _, err := e.queryPostgres(ctx, target, target.Database,
+				"drop subscription "+quotePostgresIdentifier(names.Subscription)); err != nil {
+				return nil, errors.New("PostgreSQL logical subscription cleanup recovery failed")
+			}
+		}
+		marker.Status = "target-finalized"
+		if err := e.savePostgresLogicalMarker(bindingID, "target", marker); err != nil {
+			return nil, err
+		}
+		return map[string]any{
+			"verified": true, "database_manifest_digest": inspection.ManifestDigest,
+			"final_state_artifact_digest": expectedDigest, "final_lsn": state.FinalLSN,
+			"retained_wal_bytes": int64(0), "subscription_detached": true, "idempotent": true,
+		}, nil
+	}
+	if len(subscriptionRows) != 1 || subscriptionRows[0][1] != names.Slot {
+		return nil, errors.New("marked PostgreSQL logical subscription is unavailable")
+	}
+	expectedPublicationDigest, actualPublicationDigest, err := e.postgresLogicalPublicationDefinitionDigests(ctx, source, names, marker.PublicationOwner)
+	if err != nil || expectedPublicationDigest != actualPublicationDigest || marker.PublicationDefinitionDigest != actualPublicationDigest {
+		return nil, errors.New("PostgreSQL logical publication definition changed before target finalization")
+	}
+	expectedSubscriptionDigest, actualSubscriptionDigest, err := e.postgresLogicalSubscriptionDefinitionDigests(ctx, target, logicalBinding, names, marker.SubscriptionOwner)
+	if err != nil || expectedSubscriptionDigest != actualSubscriptionDigest || marker.SubscriptionDefinitionDigest != actualSubscriptionDigest {
+		return nil, errors.New("PostgreSQL logical subscription definition changed before target finalization")
 	}
 	enabled, enabledErr := postgresBool([][]string{{subscriptionRows[0][0]}})
 	if enabledErr != nil {
@@ -1274,6 +1663,11 @@ func (e *NativeExecutor) postgresLogicalFinalizeTarget(ctx context.Context, task
 	if err != nil || inspection.ManifestDigest != state.ManifestDigest {
 		return nil, errors.New("PostgreSQL logical target does not match the fenced source manifest")
 	}
+	marker.FinalStateDigest = expectedDigest
+	marker.Status = "target-finalization-cleanup-pending"
+	if err := e.savePostgresLogicalMarker(bindingID, "target", marker); err != nil {
+		return nil, err
+	}
 	if _, err := e.queryPostgres(ctx, target, target.Database,
 		"alter subscription "+quotePostgresIdentifier(names.Subscription)+" set (slot_name=none)"); err != nil {
 		return nil, errors.New("PostgreSQL logical subscription could not detach its slot")
@@ -1282,7 +1676,6 @@ func (e *NativeExecutor) postgresLogicalFinalizeTarget(ctx context.Context, task
 		"drop subscription "+quotePostgresIdentifier(names.Subscription)); err != nil {
 		return nil, errors.New("PostgreSQL logical subscription cleanup failed")
 	}
-	marker.FinalStateDigest = expectedDigest
 	marker.Status = "target-finalized"
 	if err := e.savePostgresLogicalMarker(bindingID, "target", marker); err != nil {
 		return nil, err
@@ -1338,7 +1731,8 @@ func (e *NativeExecutor) postgresLogicalCleanupTarget(ctx context.Context, task 
 		return nil, err
 	}
 	if len(subscriptionRows) == 1 {
-		if len(subscriptionRows[0]) != 2 || (subscriptionRows[0][1] != "" && subscriptionRows[0][1] != names.Slot) {
+		if len(subscriptionRows[0]) != 3 || subscriptionRows[0][2] != marker.SubscriptionOwner ||
+			(subscriptionRows[0][1] != "" && subscriptionRows[0][1] != names.Slot) {
 			return nil, errors.New("PostgreSQL logical subscription is not owned by this plan")
 		}
 		enabled, enabledErr := postgresBool([][]string{{subscriptionRows[0][0]}})
@@ -1409,6 +1803,13 @@ func (e *NativeExecutor) postgresLogicalCleanupSource(ctx context.Context, task 
 	}
 	if err := validatePostgresLogicalMarker(marker, task, bindingID, "", "source", source.Database, names); err != nil {
 		return nil, err
+	}
+	if publicationCount == 1 {
+		ownerRows, ownerErr := e.queryPostgres(ctx, source, source.Database,
+			"select pg_get_userbyid(pubowner) from pg_publication where pubname="+quotePostgresLiteral(names.Publication))
+		if ownerErr != nil || len(ownerRows) != 1 || len(ownerRows[0]) != 1 || ownerRows[0][0] != marker.PublicationOwner {
+			return nil, errors.New("PostgreSQL logical publication is not owned by this plan")
+		}
 	}
 	if len(slotRows) == 1 {
 		if len(slotRows[0]) != 1 {
