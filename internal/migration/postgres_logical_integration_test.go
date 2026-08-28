@@ -209,8 +209,19 @@ func TestPostgresLogicalLowerDowntimeCycle(t *testing.T) {
 		"alter publication "+quotePostgresIdentifier(names.Publication)+" owner to postgres"); err != nil {
 		t.Fatalf("publication ownership restore failed: %v", err)
 	}
-	if _, err := executor.postgresLogicalStartSubscription(ctx, task, startInputs, progress); err != nil {
+	initialSubscription, err := executor.postgresLogicalStartSubscription(ctx, task, startInputs, progress)
+	if err != nil {
 		t.Fatalf("logical initial copy failed: %v", err)
+	}
+	if initialSubscription["resumed"] != false {
+		t.Fatalf("new logical subscription was incorrectly reported as resumed: %+v", initialSubscription)
+	}
+	resumedSubscription, err := executor.postgresLogicalStartSubscription(ctx, task, startInputs, progress)
+	if err != nil {
+		t.Fatalf("logical subscription resume failed: %v", err)
+	}
+	if resumedSubscription["resumed"] != true || resumedSubscription["slot_name"] != initialSubscription["slot_name"] || resumedSubscription["subscription_name"] != initialSubscription["subscription_name"] {
+		t.Fatalf("logical subscription resume did not preserve identity: initial=%+v resumed=%+v", initialSubscription, resumedSubscription)
 	}
 
 	if _, err := executor.queryPostgres(ctx, source, source.Database,

@@ -15,6 +15,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 )
@@ -66,6 +67,7 @@ type NativeExecutor struct {
 	capacityCheck          func(string, int64) error
 	oplogWindowHookForTest func(context.Context, mongodbBinding) error
 	logger                 *slog.Logger
+	composeSecretMu        sync.Mutex
 }
 
 func (e *NativeExecutor) ensureCapacity(path string, requiredBytes int64) error {
@@ -85,6 +87,9 @@ func NewNativeExecutor(rootHandles map[string]string, brokerSocket, stateDir str
 	}
 	if err := os.MkdirAll(stateDir, 0o700); err != nil {
 		return nil, err
+	}
+	if err := recoverComposeRuntimeSecrets(stateDir); err != nil {
+		return nil, fmt.Errorf("recover Compose runtime secrets: %w", err)
 	}
 	return &NativeExecutor{rootHandles: rootHandles, resolver: resolver, broker: NewBrokerClient(brokerSocket), stateDir: stateDir}, nil
 }

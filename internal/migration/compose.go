@@ -14,6 +14,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"syscall"
 
 	"gopkg.in/yaml.v3"
 )
@@ -22,7 +23,9 @@ const composePolicySchema = "operations.migration.compose-policy.v2"
 
 const composeRuntimeSecretsBindingSchema = "operations.migration.compose-runtime-secrets.v1"
 
-const composeRuntimeSecretsRoot = "/run/askio-monitor/migration-secrets"
+var composeRuntimeSecretsRoot = "/run/askio-monitor/migration-secrets"
+
+const composeRuntimeSecretsCleanupMarker = "compose-runtime-secrets-cleanup-required"
 
 var (
 	composeNamePattern           = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{1,62}$`)
@@ -593,30 +596,157 @@ func (e *NativeExecutor) composeRender(inputs map[string]any) (map[string]any, e
 }
 
 func wipeAndRemoveComposeSecret(path string) error {
-	info, err := os.Lstat(path)
+	before, err := os.Lstat(path)
 	if os.IsNotExist(err) {
 		return nil
 	}
-	if err != nil || !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 {
+	if err != nil || !before.Mode().IsRegular() || before.Mode()&os.ModeSymlink != 0 || before.Size() < 0 || before.Size() > 16*1024 || !ownedByEffectiveUser(before) {
 		return errors.New("Compose runtime secret cleanup found an unsafe file")
 	}
-	// The leaf is 0444 while mounted so an arbitrary non-root container UID can
-	// read it. The containing runtime directories remain 0700. The agent owns
-	// the file and the broker is root, so either side can restore owner-write
-	// permission only for the bounded zero-and-unlink operation.
-	if err := os.Chmod(path, 0o600); err != nil {
+	file, err := openWritableNoSymlink(path)
+	if err != nil {
+		return errors.New("Compose runtime secret cleanup could not open the file safely")
+	}
+	opened, err := file.Stat()
+	if err != nil || !opened.Mode().IsRegular() || !os.SameFile(before, opened) || opened.Size() != before.Size() {
+		file.Close()
+		return errors.New("Compose runtime secret cleanup found a changed file")
+	}
+	// Permission changes and the wipe are performed through the already-opened
+	// descriptor. The root broker only calls this for its own 0700 snapshot
+	// directories; mutable agent-owned staging files are cleaned by the agent.
+	if err := file.Chmod(0o600); err != nil {
+		file.Close()
 		return errors.New("Compose runtime secret cleanup could not secure the file for wiping")
 	}
-	file, err := os.OpenFile(path, os.O_WRONLY, 0)
-	if err != nil {
-		return err
-	}
-	zero := make([]byte, info.Size())
+	zero := make([]byte, opened.Size())
 	_, writeErr := file.WriteAt(zero, 0)
 	zeroBytes(zero)
 	syncErr := file.Sync()
+	after, statErr := os.Lstat(path)
 	closeErr := file.Close()
-	if writeErr != nil || syncErr != nil || closeErr != nil {
+	if writeErr != nil || syncErr != nil || statErr != nil || !os.SameFile(opened, after) || closeErr != nil {
+		return errors.New("Compose runtime secret cleanup failed")
+	}
+	return os.Remove(path)
+}
+
+func ownedByEffectiveUser(info os.FileInfo) bool {
+	if info == nil {
+		return false
+	}
+	stat, ok := info.Sys().(*syscall.Stat_t)
+	return ok && stat.Uid == uint32(os.Geteuid())
+}
+
+func composeSecretCleanupMarkerPath(stateDir string) string {
+	return filepath.Join(stateDir, composeRuntimeSecretsCleanupMarker)
+}
+
+func syncDirectory(path string) error {
+	directory, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	defer directory.Close()
+	return directory.Sync()
+}
+
+func writeComposeSecretCleanupMarker(stateDir string) error {
+	temporary, err := os.CreateTemp(stateDir, ".compose-cleanup-marker-")
+	if err != nil {
+		return err
+	}
+	temporaryPath := temporary.Name()
+	defer os.Remove(temporaryPath)
+	if err := temporary.Chmod(0o600); err != nil {
+		temporary.Close()
+		return err
+	}
+	if _, err := temporary.WriteString("cleanup-required\n"); err != nil {
+		temporary.Close()
+		return err
+	}
+	if err := temporary.Sync(); err != nil {
+		temporary.Close()
+		return err
+	}
+	if err := temporary.Close(); err != nil {
+		return err
+	}
+	if err := os.Rename(temporaryPath, composeSecretCleanupMarkerPath(stateDir)); err != nil {
+		return err
+	}
+	return syncDirectory(stateDir)
+}
+
+func clearComposeSecretCleanupMarker(stateDir string) error {
+	if err := os.Remove(composeSecretCleanupMarkerPath(stateDir)); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	return syncDirectory(stateDir)
+}
+
+func recoverComposeRuntimeSecrets(stateDir string) error {
+	rootInfo, err := os.Lstat(composeRuntimeSecretsRoot)
+	if os.IsNotExist(err) {
+		return clearComposeSecretCleanupMarker(stateDir)
+	}
+	if err != nil || !rootInfo.IsDir() || rootInfo.Mode()&os.ModeSymlink != 0 || rootInfo.Mode().Perm()&0o077 != 0 || !ownedByEffectiveUser(rootInfo) {
+		return errors.New("Compose runtime secret recovery root is unsafe")
+	}
+	projects, err := os.ReadDir(composeRuntimeSecretsRoot)
+	if err != nil {
+		return err
+	}
+	for _, projectEntry := range projects {
+		if !composeProjectPattern.MatchString(projectEntry.Name()) {
+			return errors.New("Compose runtime secret recovery found an unknown project")
+		}
+		projectPath := filepath.Join(composeRuntimeSecretsRoot, projectEntry.Name())
+		projectInfo, err := os.Lstat(projectPath)
+		if err != nil || !projectInfo.IsDir() || projectInfo.Mode()&os.ModeSymlink != 0 || projectInfo.Mode().Perm()&0o077 != 0 || !ownedByEffectiveUser(projectInfo) {
+			return errors.New("Compose runtime secret recovery project is unsafe")
+		}
+		secrets, err := os.ReadDir(projectPath)
+		if err != nil {
+			return err
+		}
+		for _, secret := range secrets {
+			if !composeNamePattern.MatchString(secret.Name()) {
+				return errors.New("Compose runtime secret recovery found an unknown secret")
+			}
+			if err := wipeAndRemoveComposeSecret(filepath.Join(projectPath, secret.Name())); err != nil {
+				return err
+			}
+		}
+		if err := os.Remove(projectPath); err != nil {
+			return err
+		}
+	}
+	if err := os.Remove(composeRuntimeSecretsRoot); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	return clearComposeSecretCleanupMarker(stateDir)
+}
+
+func wipeAndRemoveOpenComposeSecret(path string, file *os.File) error {
+	opened, err := file.Stat()
+	if err != nil || !opened.Mode().IsRegular() || opened.Size() < 0 || opened.Size() > 16*1024 || !ownedByEffectiveUser(opened) {
+		_ = file.Close()
+		return errors.New("Compose runtime secret cleanup found an unsafe open file")
+	}
+	if err := file.Chmod(0o600); err != nil {
+		_ = file.Close()
+		return errors.New("Compose runtime secret cleanup could not secure the open file")
+	}
+	zero := make([]byte, opened.Size())
+	_, writeErr := file.WriteAt(zero, 0)
+	zeroBytes(zero)
+	syncErr := file.Sync()
+	after, statErr := os.Lstat(path)
+	closeErr := file.Close()
+	if writeErr != nil || syncErr != nil || statErr != nil || !os.SameFile(opened, after) || closeErr != nil {
 		return errors.New("Compose runtime secret cleanup failed")
 	}
 	return os.Remove(path)
@@ -672,29 +802,65 @@ func (e *NativeExecutor) stageComposeRuntimeSecrets(ctx context.Context, task Ta
 			return nil, errors.New("Compose runtime secret names do not match the approved policy")
 		}
 	}
+	e.composeSecretMu.Lock()
+	lockHeld := true
+	unlock := func() {
+		if lockHeld {
+			lockHeld = false
+			e.composeSecretMu.Unlock()
+		}
+	}
+	if err := recoverComposeRuntimeSecrets(e.stateDir); err != nil {
+		unlock()
+		return nil, errors.New("stale Compose runtime secret cleanup failed")
+	}
+	if err := writeComposeSecretCleanupMarker(e.stateDir); err != nil {
+		unlock()
+		return nil, errors.New("Compose runtime secret cleanup marker could not be persisted")
+	}
 	if err := os.MkdirAll(composeRuntimeSecretsRoot, 0o700); err != nil {
+		unlock()
 		return nil, errors.New("Compose runtime secret memory root is unavailable")
 	}
 	rootInfo, err := os.Lstat(composeRuntimeSecretsRoot)
-	if err != nil || !rootInfo.IsDir() || rootInfo.Mode()&os.ModeSymlink != 0 || rootInfo.Mode().Perm()&0o077 != 0 {
+	if err != nil || !rootInfo.IsDir() || rootInfo.Mode()&os.ModeSymlink != 0 || rootInfo.Mode().Perm()&0o077 != 0 || !ownedByEffectiveUser(rootInfo) {
+		unlock()
 		return nil, errors.New("Compose runtime secret memory root is unsafe")
 	}
 	directory := filepath.Join(composeRuntimeSecretsRoot, project)
 	if err := os.Mkdir(directory, 0o700); err != nil {
+		unlock()
 		return nil, errors.New("Compose runtime secret staging directory is not new")
 	}
-	paths := make([]string, 0, len(policy.SecretFiles))
+	type stagedSecret struct {
+		path string
+		file *os.File
+	}
+	staged := make([]stagedSecret, 0, len(policy.SecretFiles))
+	cleanupCalled := false
+	var cleanupResult error
 	cleanup := func() error {
+		if cleanupCalled {
+			return cleanupResult
+		}
+		cleanupCalled = true
+		defer unlock()
 		var cleanupErr error
-		for _, path := range paths {
-			if err := wipeAndRemoveComposeSecret(path); err != nil && cleanupErr == nil {
+		for _, secret := range staged {
+			if err := wipeAndRemoveOpenComposeSecret(secret.path, secret.file); err != nil && cleanupErr == nil {
 				cleanupErr = err
 			}
 		}
 		if err := os.Remove(directory); err != nil && !os.IsNotExist(err) && cleanupErr == nil {
 			cleanupErr = err
 		}
-		return cleanupErr
+		if cleanupErr == nil {
+			if err := clearComposeSecretCleanupMarker(e.stateDir); err != nil {
+				cleanupErr = err
+			}
+		}
+		cleanupResult = cleanupErr
+		return cleanupResult
 	}
 	names := make([]string, 0, len(policy.SecretFiles))
 	for name := range policy.SecretFiles {
@@ -712,17 +878,16 @@ func (e *NativeExecutor) stageComposeRuntimeSecrets(ctx context.Context, task Ta
 			_ = cleanup()
 			return nil, errors.New("Compose runtime secret staging failed")
 		}
-		paths = append(paths, path)
+		staged = append(staged, stagedSecret{path: path, file: file})
 		value := []byte(binding.Secrets[name])
 		_, writeErr := file.Write(value)
 		zeroBytes(value)
 		syncErr := file.Sync()
-		closeErr := file.Close()
-		if writeErr != nil || syncErr != nil || closeErr != nil {
+		if writeErr != nil || syncErr != nil {
 			_ = cleanup()
 			return nil, errors.New("Compose runtime secret staging failed")
 		}
-		if chmodErr := os.Chmod(path, 0o444); chmodErr != nil {
+		if chmodErr := file.Chmod(0o444); chmodErr != nil {
 			_ = cleanup()
 			return nil, errors.New("Compose runtime secret staging failed")
 		}
@@ -736,23 +901,24 @@ func (e *NativeExecutor) composeStartWithRuntimeSecrets(ctx context.Context, tas
 		return nil, err
 	}
 	response, executeErr := e.broker.Execute(ctx, BrokerRequest{SchemaVersion: brokerSchemaVersion, RequestID: task.Nonce, Task: task})
+	cleanupErr := cleanup()
 	if executeErr != nil {
-		// A lost broker response is ambiguous: Compose may already have created a
-		// container whose secret bind mount depends on this inode. Recovery uses
-		// the typed stop primitive, which also wipes the runtime secret directory.
+		if cleanupErr != nil {
+			return nil, errors.New("typed privilege broker response was lost and runtime secret cleanup failed")
+		}
 		return nil, executeErr
 	}
 	if !response.OK {
-		preserveRuntimeSecrets, _ := response.Outputs["preserve_runtime_secrets"].(bool)
-		if !preserveRuntimeSecrets {
-			if cleanupErr := cleanup(); cleanupErr != nil {
-				return nil, errors.New("typed privilege broker rejected the Compose start and runtime secret cleanup failed")
-			}
+		if cleanupErr != nil {
+			return nil, errors.New("typed privilege broker rejected the Compose start and runtime secret cleanup failed")
 		}
 		if response.Error != nil {
 			return nil, errors.New(response.Error.SafeMessage)
 		}
 		return nil, errors.New("typed privilege broker rejected the Compose start")
+	}
+	if cleanupErr != nil {
+		return nil, errors.New("Compose started but mutable runtime secret cleanup failed")
 	}
 	if response.Outputs == nil {
 		response.Outputs = map[string]any{}

@@ -26,6 +26,7 @@ import (
 
 const (
 	RouteTaskClaim        = "monitor-agent-migration-task-claim"
+	RouteHeartbeat        = "monitor-agent-heartbeat"
 	RouteTaskProgress     = "monitor-agent-migration-task-progress"
 	RouteTaskResult       = "monitor-agent-migration-task-result"
 	RouteTaskCancelStatus = "monitor-agent-migration-task-cancel-status"
@@ -516,6 +517,10 @@ func (r *Runner) signedBody(route string, fields map[string]any) (map[string]any
 	}
 	body["request_signature"] = base64.RawURLEncoding.EncodeToString(ed25519.Sign(r.identity.SigningPrivateKey, canonical))
 	return body, nil
+}
+
+func (r *Runner) SignRequestBody(route string, fields map[string]any) (map[string]any, error) {
+	return r.signedBody(route, fields)
 }
 
 func envelopeUnsigned(task TaskEnvelope) map[string]any {

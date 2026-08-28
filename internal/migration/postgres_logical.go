@@ -1189,7 +1189,8 @@ func (e *NativeExecutor) postgresLogicalStartSubscription(ctx context.Context, t
 	if err != nil || len(subscriptionRows) > 1 {
 		return nil, errors.New("PostgreSQL logical subscription inventory is invalid")
 	}
-	if len(subscriptionRows) == 1 {
+	resumed := len(subscriptionRows) == 1
+	if resumed {
 		if len(subscriptionRows[0]) != 3 {
 			return nil, errors.New("existing PostgreSQL logical subscription is not owned by this plan")
 		}
@@ -1290,6 +1291,7 @@ func (e *NativeExecutor) postgresLogicalStartSubscription(ctx context.Context, t
 	return map[string]any{
 		"replicating": true, "publication_name": names.Publication, "slot_name": names.Slot,
 		"subscription_name": names.Subscription, "caught_up_lsn": lsn, "retained_wal_bytes": walBytes,
+		"resumed":                       resumed,
 		"publication_definition_digest": actualPublicationDigest, "subscription_definition_digest": actualSubscriptionDigest,
 	}, nil
 }

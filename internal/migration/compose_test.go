@@ -172,3 +172,72 @@ func TestComposeRuntimeSecretCleanupWipesReadOnlyLeaf(t *testing.T) {
 		t.Fatalf("runtime secret leaf still exists after cleanup: %v", err)
 	}
 }
+
+func TestNativeExecutorStartupRecoversCrashLeftRuntimeSecrets(t *testing.T) {
+	originalRoot := composeRuntimeSecretsRoot
+	composeRuntimeSecretsRoot = filepath.Join(t.TempDir(), "migration-secrets")
+	defer func() { composeRuntimeSecretsRoot = originalRoot }()
+	state := filepath.Join(t.TempDir(), "state")
+	workspace := filepath.Join(t.TempDir(), "workspace")
+	if err := os.MkdirAll(filepath.Join(composeRuntimeSecretsRoot, "askio_mig_recovery"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(state, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(workspace, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	secretPath := filepath.Join(composeRuntimeSecretsRoot, "askio_mig_recovery", "database_password")
+	if err := os.WriteFile(secretPath, []byte("crash-left-plaintext"), 0o444); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeComposeSecretCleanupMarker(state); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := NewNativeExecutor(map[string]string{"target": workspace}, filepath.Join(t.TempDir(), "broker.sock"), state); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Lstat(composeRuntimeSecretsRoot); !os.IsNotExist(err) {
+		t.Fatalf("startup recovery left the secret root: %v", err)
+	}
+	if _, err := os.Lstat(composeSecretCleanupMarkerPath(state)); !os.IsNotExist(err) {
+		t.Fatalf("startup recovery left the cleanup marker: %v", err)
+	}
+}
+
+func TestComposeSecretRecoveryRetainsMarkerUntilAFailedCleanupCanRetry(t *testing.T) {
+	originalRoot := composeRuntimeSecretsRoot
+	composeRuntimeSecretsRoot = filepath.Join(t.TempDir(), "migration-secrets")
+	defer func() { composeRuntimeSecretsRoot = originalRoot }()
+	state := filepath.Join(t.TempDir(), "state")
+	project := filepath.Join(composeRuntimeSecretsRoot, "askio_mig_retry")
+	if err := os.MkdirAll(project, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(state, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	unsafePath := filepath.Join(project, "unexpected.name")
+	if err := os.WriteFile(unsafePath, []byte("plaintext"), 0o444); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeComposeSecretCleanupMarker(state); err != nil {
+		t.Fatal(err)
+	}
+	if err := recoverComposeRuntimeSecrets(state); err == nil {
+		t.Fatal("unsafe cleanup unexpectedly succeeded")
+	}
+	if _, err := os.Lstat(composeSecretCleanupMarkerPath(state)); err != nil {
+		t.Fatalf("failed cleanup consumed its durable retry marker: %v", err)
+	}
+	if err := os.Rename(unsafePath, filepath.Join(project, "database_password")); err != nil {
+		t.Fatal(err)
+	}
+	if err := recoverComposeRuntimeSecrets(state); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Lstat(composeSecretCleanupMarkerPath(state)); !os.IsNotExist(err) {
+		t.Fatalf("successful retry left the marker: %v", err)
+	}
+}

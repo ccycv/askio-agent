@@ -3,10 +3,13 @@ package migration
 import (
 	"context"
 	"errors"
+	"os"
 	"path/filepath"
 	"sync"
 	"testing"
 	"time"
+
+	"golang.org/x/sys/unix"
 )
 
 type fakeServiceController struct {
@@ -44,8 +47,24 @@ func (controller *fakeServiceController) IsActive(_ context.Context, service str
 
 func writerFenceBroker(t *testing.T, controller serviceController) *Broker {
 	t.Helper()
+	root := t.TempDir()
+	markerRoot := filepath.Join(root, "markers")
+	unitRoot := filepath.Join(root, "units")
+	for _, service := range []string{"api.service", "worker.service"} {
+		directory := filepath.Join(unitRoot, service+".d")
+		if err := os.MkdirAll(directory, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		content := "[Unit]\nRequires=askio-migration-broker.service\nAfter=askio-migration-broker.service\nConditionPathExists=!" + filepath.Join(markerRoot, service+".fenced") + "\n"
+		if err := os.WriteFile(filepath.Join(directory, "90-askio-migration-fence.conf"), []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
 	return &Broker{
-		config: BrokerConfig{StatePath: filepath.Join(t.TempDir(), "broker-state.json")},
+		config: BrokerConfig{
+			StatePath: filepath.Join(root, "broker-state.json"), LifecycleLockPath: filepath.Join(root, "lifecycle.lock"),
+			ServiceFenceMarkerRoot: markerRoot, ServiceUnitRoot: unitRoot,
+		},
 		allowedServices: map[string]struct{}{
 			"api.service":    {},
 			"worker.service": {},
@@ -94,6 +113,44 @@ func TestWriterFenceCannotBeReleasedByAnotherRun(t *testing.T) {
 	}
 }
 
+func TestWriterFenceTransitionWaitsForInstallerLifecycleLock(t *testing.T) {
+	controller := &fakeServiceController{
+		active: map[string]bool{"api.service": true, "worker.service": true}, failures: map[string]error{}, unknown: map[string]error{},
+	}
+	broker := writerFenceBroker(t, controller)
+	lock, err := os.OpenFile(broker.lifecycleLockPath(), os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lock.Close()
+	if err := unix.Flock(int(lock.Fd()), unix.LOCK_EX); err != nil {
+		t.Fatal(err)
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		_, operationErr := broker.serviceOperation(context.Background(), writerFenceRequest(61), "stop")
+		done <- operationErr
+	}()
+	select {
+	case operationErr := <-done:
+		t.Fatalf("writer-fence transition bypassed the installer lifecycle lock: %v", operationErr)
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	if err := unix.Flock(int(lock.Fd()), unix.LOCK_UN); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case operationErr := <-done:
+		if operationErr != nil {
+			t.Fatal(operationErr)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("writer-fence transition did not resume after the installer lifecycle lock was released")
+	}
+}
+
 func TestWriterFencePersistsIntentBeforePartialStopFailure(t *testing.T) {
 	controller := &fakeServiceController{
 		active: map[string]bool{"api.service": true, "worker.service": true},
@@ -132,6 +189,30 @@ func TestWriterFencePersistsIntentBeforePartialStopFailure(t *testing.T) {
 	}
 	if outputs["writer_fence_active"] != true || broker.state.WriterFences[request.Task.MigrationID].Phase != writerFenceActive {
 		t.Fatalf("retry did not complete the durable fence: %#v", outputs)
+	}
+}
+
+func TestWriterFenceBootInhibitorPrecedesIntentPersistence(t *testing.T) {
+	controller := &fakeServiceController{
+		active: map[string]bool{"api.service": true, "worker.service": true}, failures: map[string]error{}, unknown: map[string]error{},
+	}
+	broker := writerFenceBroker(t, controller)
+	blockedParent := filepath.Join(filepath.Dir(broker.config.ServiceFenceMarkerRoot), "state-parent-is-a-file")
+	if err := os.WriteFile(blockedParent, []byte("not-a-directory"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	broker.config.StatePath = filepath.Join(blockedParent, "broker-state.json")
+
+	if _, err := broker.serviceOperation(context.Background(), writerFenceRequest(6), "stop"); err == nil {
+		t.Fatal("injected durable-state failure was not reported")
+	}
+	for _, service := range []string{"api.service", "worker.service"} {
+		if _, err := os.Lstat(filepath.Join(broker.config.ServiceFenceMarkerRoot, service+".fenced")); err != nil {
+			t.Fatalf("boot inhibitor was not durable before state persistence for %s: %v", service, err)
+		}
+		if controller.active[service] {
+			t.Fatalf("writer remained active after state persistence failure: %s", service)
+		}
 	}
 }
 
@@ -234,6 +315,40 @@ func TestWriterFenceWatchdogRollsBackCrashDuringRelease(t *testing.T) {
 	}
 	if fence := broker.state.WriterFences["migration-writer-fence-test"]; !fence.Active || fence.Phase != writerFenceActive {
 		t.Fatalf("watchdog did not restore the active fence state: %#v", fence)
+	}
+}
+
+func TestWriterFenceBootResumesOnlyDurablyAuthorizedRelease(t *testing.T) {
+	controller := &fakeServiceController{
+		active:   map[string]bool{"api.service": false, "worker.service": false},
+		failures: map[string]error{},
+		unknown:  map[string]error{},
+	}
+	broker := writerFenceBroker(t, controller)
+	if err := broker.activateServiceFenceInhibitors([]string{"api.service", "worker.service"}); err != nil {
+		t.Fatal(err)
+	}
+	broker.state.WriterFences["migration-writer-fence-test"] = writerFenceState{
+		MigrationID: "migration-writer-fence-test", RunID: "run-writer-fence-test", Services: []string{"api.service", "worker.service"},
+		PreviouslyActive: []string{"api.service"}, Active: false, Phase: writerFenceReleaseAuthorized, FencingToken: 20,
+	}
+	if err := broker.persistFences(); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := broker.resumeAuthorizedWriterFenceReleases(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if !controller.active["api.service"] || controller.active["worker.service"] {
+		t.Fatalf("authorized release did not restore the reviewed service set: %#v", controller.active)
+	}
+	if fence := broker.state.WriterFences["migration-writer-fence-test"]; fence.Active || fence.Phase != writerFenceReleased {
+		t.Fatalf("authorized release was not completed durably: %#v", fence)
+	}
+	for _, service := range []string{"api.service", "worker.service"} {
+		if _, err := os.Lstat(broker.serviceFenceMarker(service)); !os.IsNotExist(err) {
+			t.Fatalf("authorized release left a boot inhibitor for %s: %v", service, err)
+		}
 	}
 }
 

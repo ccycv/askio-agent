@@ -20,13 +20,15 @@ import (
 	"sync"
 	"time"
 
+	"golang.org/x/sys/unix"
 	"gopkg.in/yaml.v3"
 )
 
 const (
-	brokerSchemaVersion     = "operations.migration.broker.v1"
-	brokerFenceAttestAction = "attest-active-writer-fences"
-	DefaultBrokerStatePath  = "/var/lib/askio-migration-broker/broker-state.json"
+	brokerSchemaVersion            = "operations.migration.broker.v1"
+	brokerFenceAttestAction        = "attest-active-writer-fences"
+	DefaultBrokerStatePath         = "/var/lib/askio-migration-broker/broker-state.json"
+	DefaultBrokerLifecycleLockPath = "/var/lib/askio-migration-broker/lifecycle.lock"
 )
 
 var (
@@ -63,6 +65,10 @@ type BrokerConfig struct {
 	BackendPublicKeyBase64 string
 	RootHandles            map[string]string
 	AllowedServices        []string
+	ComposeSnapshotRoot    string
+	ServiceFenceMarkerRoot string
+	ServiceUnitRoot        string
+	LifecycleLockPath      string
 }
 
 type brokerPersistentState struct {
@@ -105,10 +111,11 @@ type WriterFenceAttestation struct {
 }
 
 const (
-	writerFenceActivating = "activating"
-	writerFenceActive     = "active"
-	writerFenceReleasing  = "releasing"
-	writerFenceReleased   = "released"
+	writerFenceActivating        = "activating"
+	writerFenceActive            = "active"
+	writerFenceReleasing         = "releasing"
+	writerFenceReleaseAuthorized = "release_authorized"
+	writerFenceReleased          = "released"
 )
 
 type serviceController interface {
@@ -444,6 +451,39 @@ func (b *Broker) serviceController() (serviceController, error) {
 	return systemdServiceController{binary: systemctl}, nil
 }
 
+func (b *Broker) lifecycleLockPath() string {
+	if b.config.LifecycleLockPath != "" {
+		return b.config.LifecycleLockPath
+	}
+	if b.config.StatePath != "" && b.config.StatePath != DefaultBrokerStatePath {
+		return filepath.Join(filepath.Dir(b.config.StatePath), "lifecycle.lock")
+	}
+	return DefaultBrokerLifecycleLockPath
+}
+
+func (b *Broker) withLifecycleLock(work func() (map[string]any, error)) (map[string]any, error) {
+	path := b.lifecycleLockPath()
+	if !filepath.IsAbs(path) {
+		return nil, errors.New("migration broker lifecycle lock path must be absolute")
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return nil, err
+	}
+	lock, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		return nil, err
+	}
+	defer lock.Close()
+	if err := lock.Chmod(0o600); err != nil {
+		return nil, err
+	}
+	if err := unix.Flock(int(lock.Fd()), unix.LOCK_EX); err != nil {
+		return nil, err
+	}
+	defer unix.Flock(int(lock.Fd()), unix.LOCK_UN) //nolint:errcheck -- the descriptor close also releases the lock
+	return work()
+}
+
 func (b *Broker) serviceOperation(ctx context.Context, request BrokerRequest, action string) (map[string]any, error) {
 	services, err := stringListInput(taskInputs(request.Task), "service_handles", 32)
 	if err != nil {
@@ -462,16 +502,18 @@ func (b *Broker) serviceOperation(ctx context.Context, request BrokerRequest, ac
 	if err != nil {
 		return nil, err
 	}
-	b.writerFenceMu.Lock()
-	defer b.writerFenceMu.Unlock()
-	switch action {
-	case "stop":
-		return b.activateWriterFence(ctx, controller, request, services)
-	case "start":
-		return b.releaseWriterFence(ctx, controller, request, services)
-	default:
-		return nil, errors.New("unsupported service operation")
-	}
+	return b.withLifecycleLock(func() (map[string]any, error) {
+		b.writerFenceMu.Lock()
+		defer b.writerFenceMu.Unlock()
+		switch action {
+		case "stop":
+			return b.activateWriterFence(ctx, controller, request, services)
+		case "start":
+			return b.releaseWriterFence(ctx, controller, request, services)
+		default:
+			return nil, errors.New("unsupported service operation")
+		}
+	})
 }
 
 func (b *Broker) activateWriterFence(ctx context.Context, controller serviceController, request BrokerRequest, services []string) (map[string]any, error) {
@@ -481,6 +523,12 @@ func (b *Broker) activateWriterFence(ctx context.Context, controller serviceCont
 	}
 	b.mu.Lock()
 	prior, found := b.state.WriterFences[request.Task.MigrationID]
+	for migrationID, activeFence := range b.state.WriterFences {
+		if migrationID != request.Task.MigrationID && activeFence.Active && intersectsServices(activeFence.Services, services) {
+			b.mu.Unlock()
+			return nil, errors.New("writer service is already fenced by another migration")
+		}
+	}
 	b.mu.Unlock()
 	if found && prior.Active && (prior.RunID != runID || !equalStrings(prior.Services, services)) {
 		return nil, errors.New("writer fence ownership or service scope is unproven")
@@ -502,6 +550,12 @@ func (b *Broker) activateWriterFence(ctx context.Context, controller serviceCont
 	intent.Phase = writerFenceActivating
 	intent.FencingToken = request.Task.FencingToken
 
+	// Install the boot inhibitor before persisting intent. A crash between
+	// these operations can leave an orphaned fail-closed marker, but can never
+	// leave a persisted fence whose writer is allowed to restart during boot.
+	if err := b.activateServiceFenceInhibitors(services); err != nil {
+		return nil, err
+	}
 	// Persist the fail-closed intent before stopping the first service. The
 	// watchdog can therefore finish a partially applied fence after a crash.
 	b.mu.Lock()
@@ -513,6 +567,9 @@ func (b *Broker) activateWriterFence(ctx context.Context, controller serviceCont
 			delete(b.state.WriterFences, request.Task.MigrationID)
 		}
 		b.mu.Unlock()
+		for _, service := range services {
+			_ = controller.Operate(ctx, "stop", service)
+		}
 		return nil, err
 	}
 	b.mu.Unlock()
@@ -598,6 +655,20 @@ func (b *Broker) releaseWriterFence(ctx context.Context, controller serviceContr
 		return nil, errors.New("writer fence ownership or service scope is unproven")
 	}
 	if !fence.Active {
+		if fence.Phase == writerFenceReleaseAuthorized {
+			fence.FencingToken = request.Task.FencingToken
+			fence.LastVerifiedAt = verifiedAt
+			released, releaseErr := b.completeAuthorizedWriterFenceRelease(ctx, controller, fence)
+			if releaseErr != nil {
+				return nil, releaseErr
+			}
+			return map[string]any{
+				"services": services, "action": "start", "writer_fence_active": false,
+				"violation_count": released.ViolationCount, "verified_at": released.LastVerifiedAt,
+				"restarted_services":         append([]string{}, released.PreviouslyActive...),
+				"resumed_authorized_release": true,
+			}, nil
+		}
 		if fence.Phase != writerFenceReleased || verifyExpectedServiceStates(ctx, controller, services, fence.PreviouslyActive) != nil {
 			return nil, errors.New("released writer fence service state is unproven")
 		}
@@ -623,12 +694,16 @@ func (b *Broker) releaseWriterFence(ctx context.Context, controller serviceContr
 		return nil, errors.New("writer fence cannot be released while a scoped service is active")
 	}
 
-	releasing := fence
-	releasing.Phase = writerFenceReleasing
-	releasing.FencingToken = request.Task.FencingToken
-	releasing.LastVerifiedAt = time.Now().UTC().Format(time.RFC3339Nano)
+	// Persist the reviewed release authorization before removing a single boot
+	// inhibitor. A crash after this point can only resume an already-authorized
+	// release; a crash before it remains an active, fail-closed fence.
+	authorized := fence
+	authorized.Active = false
+	authorized.Phase = writerFenceReleaseAuthorized
+	authorized.FencingToken = request.Task.FencingToken
+	authorized.LastVerifiedAt = time.Now().UTC().Format(time.RFC3339Nano)
 	b.mu.Lock()
-	b.state.WriterFences[request.Task.MigrationID] = releasing
+	b.state.WriterFences[request.Task.MigrationID] = authorized
 	if err := b.persistFences(); err != nil {
 		b.state.WriterFences[request.Task.MigrationID] = fence
 		b.mu.Unlock()
@@ -636,34 +711,10 @@ func (b *Broker) releaseWriterFence(ctx context.Context, controller serviceContr
 	}
 	b.mu.Unlock()
 
-	releaseFailed := false
-	for _, service := range releasing.PreviouslyActive {
-		if err := controller.Operate(ctx, "start", service); err != nil {
-			releaseFailed = true
-			break
-		}
-	}
-	if !releaseFailed {
-		releaseFailed = verifyExpectedServiceStates(ctx, controller, services, releasing.PreviouslyActive) != nil
-	}
-	if releaseFailed {
-		b.restoreActiveWriterFence(ctx, controller, releasing)
-		return nil, errors.New("writer fence release failed and was rolled back")
-	}
-
-	released := releasing
-	released.Active = false
-	released.Phase = writerFenceReleased
-	released.LastVerifiedAt = time.Now().UTC().Format(time.RFC3339Nano)
-	b.mu.Lock()
-	b.state.WriterFences[request.Task.MigrationID] = released
-	if err := b.persistFences(); err != nil {
-		b.state.WriterFences[request.Task.MigrationID] = releasing
-		b.mu.Unlock()
-		b.restoreActiveWriterFence(ctx, controller, releasing)
+	released, err := b.completeAuthorizedWriterFenceRelease(ctx, controller, authorized)
+	if err != nil {
 		return nil, err
 	}
-	b.mu.Unlock()
 	return map[string]any{
 		"services": services, "action": "start", "writer_fence_active": false,
 		"violation_count": released.ViolationCount, "verified_at": released.LastVerifiedAt,
@@ -671,7 +722,47 @@ func (b *Broker) releaseWriterFence(ctx context.Context, controller serviceContr
 	}, nil
 }
 
+func (b *Broker) completeAuthorizedWriterFenceRelease(ctx context.Context, controller serviceController, authorized writerFenceState) (writerFenceState, error) {
+	if authorized.Active || authorized.Phase != writerFenceReleaseAuthorized {
+		return writerFenceState{}, errors.New("writer fence release authorization is invalid")
+	}
+	if err := b.releaseServiceFenceInhibitors(authorized.Services); err != nil {
+		b.restoreActiveWriterFence(ctx, controller, authorized)
+		return writerFenceState{}, errors.New("writer fence inhibitor release failed and was rolled back")
+	}
+	releaseFailed := false
+	for _, service := range authorized.PreviouslyActive {
+		if err := controller.Operate(ctx, "start", service); err != nil {
+			releaseFailed = true
+			break
+		}
+	}
+	if !releaseFailed {
+		releaseFailed = verifyExpectedServiceStates(ctx, controller, authorized.Services, authorized.PreviouslyActive) != nil
+	}
+	if releaseFailed {
+		b.restoreActiveWriterFence(ctx, controller, authorized)
+		return writerFenceState{}, errors.New("writer fence release failed and was rolled back")
+	}
+
+	released := authorized
+	released.Active = false
+	released.Phase = writerFenceReleased
+	released.LastVerifiedAt = time.Now().UTC().Format(time.RFC3339Nano)
+	b.mu.Lock()
+	b.state.WriterFences[authorized.MigrationID] = released
+	if err := b.persistFences(); err != nil {
+		b.state.WriterFences[authorized.MigrationID] = authorized
+		b.mu.Unlock()
+		b.restoreActiveWriterFence(ctx, controller, authorized)
+		return writerFenceState{}, err
+	}
+	b.mu.Unlock()
+	return released, nil
+}
+
 func (b *Broker) restoreActiveWriterFence(ctx context.Context, controller serviceController, fence writerFenceState) {
+	_ = b.activateServiceFenceInhibitors(fence.Services)
 	for _, service := range fence.Services {
 		_ = controller.Operate(ctx, "stop", service)
 	}
@@ -864,7 +955,31 @@ func (b *Broker) monitorWriterFences(ctx context.Context) {
 		if err := b.reconcileWriterFences(ctx); err != nil {
 			continue
 		}
+		_ = b.resumeAuthorizedWriterFenceReleases(ctx)
 	}
+}
+
+func (b *Broker) resumeAuthorizedWriterFenceReleases(ctx context.Context) error {
+	controller, err := b.serviceController()
+	if err != nil {
+		return err
+	}
+	b.writerFenceMu.Lock()
+	defer b.writerFenceMu.Unlock()
+	b.mu.Lock()
+	pending := make([]writerFenceState, 0, len(b.state.WriterFences))
+	for _, fence := range b.state.WriterFences {
+		if !fence.Active && fence.Phase == writerFenceReleaseAuthorized {
+			pending = append(pending, fence)
+		}
+	}
+	b.mu.Unlock()
+	for _, fence := range pending {
+		if _, err := b.completeAuthorizedWriterFenceRelease(ctx, controller, fence); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (b *Broker) reconcileWriterFences(ctx context.Context) error {
@@ -903,6 +1018,9 @@ func (b *Broker) reconcileWriterFences(ctx context.Context) error {
 	for _, fence := range active {
 		violated := false
 		watchdogError := false
+		if err := b.activateServiceFenceInhibitors(fence.Services); err != nil {
+			watchdogError = true
+		}
 		recoveredRelease := fence.Phase == writerFenceReleasing
 		countViolations := fence.Phase == writerFenceActive
 		for _, service := range fence.Services {
@@ -913,6 +1031,9 @@ func (b *Broker) reconcileWriterFences(ctx context.Context) error {
 			if commandErr != nil || isActive || recoveredRelease {
 				if countViolations {
 					violated = true
+					if isActive {
+						_, _ = fmt.Fprintf(os.Stderr, "askio migration writer-fence violation migration_id=%s run_id=%s service=%s\n", fence.MigrationID, fence.RunID, service)
+					}
 				}
 				if stopErr := controller.Operate(ctx, "stop", service); stopErr != nil {
 					watchdogError = true
@@ -967,17 +1088,20 @@ func (b *Broker) cleanup(request BrokerRequest) (map[string]any, error) {
 	if err != nil || relative == "." || strings.Contains(relative, "/") || !fileNamePattern.MatchString(relative) {
 		return nil, errors.New("staging handle is invalid")
 	}
-	target, err := b.resolver.Resolve(handle, relative, true)
+	root, err := b.resolver.Root(handle)
 	if err != nil {
 		return nil, err
 	}
-	if err := os.RemoveAll(target); err != nil {
+	if err := removeTreeBeneath(root, relative); err != nil {
 		return nil, err
 	}
 	return map[string]any{"staging_handle": relative, "removed": true}, nil
 }
 
 func validateComposeSecretScope(project string, policy composePolicyResult, requireFiles bool) error {
+	if len(policy.BindMountRoots) != 0 {
+		return errors.New("Compose bind mounts are not supported by the root broker")
+	}
 	directory := filepath.Join(composeRuntimeSecretsRoot, project)
 	for name, path := range policy.SecretFiles {
 		if path != filepath.Join(directory, name) {
@@ -1020,13 +1144,9 @@ func (b *Broker) readComposePolicy(request BrokerRequest, requireSecretFiles boo
 	if err != nil {
 		return "", "", "", composePolicyResult{}, err
 	}
-	info, err := os.Lstat(filePath)
-	if err != nil || !info.Mode().IsRegular() || info.Size() < 1 || info.Size() > 256*1024 {
-		return "", "", "", composePolicyResult{}, errors.New("Compose policy file is missing or invalid")
-	}
-	data, err := os.ReadFile(filePath)
+	data, err := readStableRegularFile(filePath, 256*1024)
 	if err != nil {
-		return "", "", "", composePolicyResult{}, err
+		return "", "", "", composePolicyResult{}, errors.New("Compose policy file is missing, changed, or unsafe")
 	}
 	policy, err := parseComposePolicy(data)
 	if err != nil {
@@ -1149,10 +1269,20 @@ func (b *Broker) composePreflight(ctx context.Context, request BrokerRequest) (m
 }
 
 func (b *Broker) composeStart(ctx context.Context, request BrokerRequest) (map[string]any, error) {
-	root, filePath, project, policy, err := b.readComposePolicy(request, true)
+	root, _, project, policy, err := b.readComposePolicy(request, true)
 	if err != nil {
 		return nil, err
 	}
+	snapshot, err := b.createImmutableComposeSnapshot(root, project, policy)
+	if err != nil {
+		return nil, err
+	}
+	removeSnapshot := true
+	defer func() {
+		if removeSnapshot {
+			_ = b.removeImmutableComposeSnapshot(snapshot)
+		}
+	}()
 	docker, err := fixedExecutable("/usr/bin/docker", "/usr/local/bin/docker")
 	if err != nil {
 		return nil, err
@@ -1160,19 +1290,21 @@ func (b *Broker) composeStart(ctx context.Context, request BrokerRequest) (map[s
 	if err := ensureComposeTargetAbsent(ctx, docker, project, policy); err != nil {
 		return nil, err
 	}
-	baseArgs := []string{"compose", "--project-directory", root, "--file", filePath, "--project-name", project}
+	baseArgs := []string{"compose", "--project-directory", root, "--file", snapshot.FilePath, "--project-name", project}
 	if _, err := runFixed(ctx, docker, append(baseArgs, "config", "--quiet")...); err != nil {
 		return nil, errors.New("Compose engine rejected the policy document")
 	}
 	if _, err := runFixed(ctx, docker, append(baseArgs, "up", "--detach", "--wait", "--wait-timeout", "120", "--remove-orphans")...); err != nil {
 		downArgs := append(baseArgs, "down", "--remove-orphans", "--timeout", "30", "--volumes")
 		if _, cleanupErr := runFixed(ctx, docker, downArgs...); cleanupErr != nil {
+			removeSnapshot = false
 			return nil, &composeStartFailure{
 				message:                "isolated Compose start failed and project cleanup could not be proven",
 				preserveRuntimeSecrets: true,
 			}
 		}
 		if cleanupErr := ensureComposeTargetAbsent(ctx, docker, project, policy); cleanupErr != nil {
+			removeSnapshot = false
 			return nil, &composeStartFailure{
 				message:                "isolated Compose start failed and residual project state remains",
 				preserveRuntimeSecrets: true,
@@ -1180,22 +1312,33 @@ func (b *Broker) composeStart(ctx context.Context, request BrokerRequest) (map[s
 		}
 		return nil, errors.New("isolated Compose start failed")
 	}
+	removeSnapshot = false
 	return map[string]any{
-		"project_name": project, "compose_digest": policy.Digest, "service_count": len(policy.Document.Services),
+		"project_name": project, "compose_digest": policy.Digest, "service_count": snapshot.Metadata.ServiceCount,
 		"started": true, "isolated": true,
 	}, nil
 }
 
 func (b *Broker) composeStop(ctx context.Context, request BrokerRequest) (map[string]any, error) {
-	root, filePath, project, policy, err := b.readComposePolicy(request, false)
+	inputs := taskInputs(request.Task)
+	project, err := composeProjectInput(inputs)
 	if err != nil {
 		return nil, err
 	}
+	expectedDigest, err := stringInput(inputs, "compose_digest")
+	if err != nil || !strings.HasPrefix(expectedDigest, "sha256:") {
+		return nil, errors.New("Compose policy digest is invalid")
+	}
+	snapshot, err := b.loadImmutableComposeSnapshot(project, expectedDigest)
+	if err != nil {
+		return nil, err
+	}
+	policy := composePolicyResult{Digest: snapshot.Metadata.ApprovedDigest, PublishedPorts: snapshot.Metadata.PublishedPorts, NamedVolumes: snapshot.Metadata.NamedVolumes, NetworkNames: snapshot.Metadata.NetworkNames}
 	docker, err := fixedExecutable("/usr/bin/docker", "/usr/local/bin/docker")
 	if err != nil {
 		return nil, err
 	}
-	baseArgs := []string{"compose", "--project-directory", root, "--file", filePath, "--project-name", project}
+	baseArgs := []string{"compose", "--project-directory", snapshot.Metadata.SourceRoot, "--file", snapshot.FilePath, "--project-name", project}
 	downArgs := append(baseArgs, "down", "--remove-orphans", "--timeout", "30")
 	removeVolumes, _ := taskInputs(request.Task)["remove_volumes"].(bool)
 	if removeVolumes {
@@ -1204,13 +1347,8 @@ func (b *Broker) composeStop(ctx context.Context, request BrokerRequest) (map[st
 	if _, err := runFixed(ctx, docker, downArgs...); err != nil {
 		return nil, errors.New("isolated Compose stop failed")
 	}
-	for _, path := range policy.SecretFiles {
-		if err := wipeAndRemoveComposeSecret(path); err != nil {
-			return nil, errors.New("Compose runtime secret cleanup failed")
-		}
-	}
-	if err := os.Remove(filepath.Join(composeRuntimeSecretsRoot, project)); err != nil && !os.IsNotExist(err) {
-		return nil, errors.New("Compose runtime secret directory cleanup failed")
+	if err := b.removeImmutableComposeSnapshot(snapshot); err != nil {
+		return nil, errors.New("immutable Compose snapshot cleanup failed")
 	}
 	return map[string]any{"project_name": project, "compose_digest": policy.Digest, "stopped": true, "volumes_preserved": !removeVolumes}, nil
 }
@@ -1321,6 +1459,12 @@ func (b *Broker) handleConnection(ctx context.Context, connection *net.UnixConn)
 }
 
 func (b *Broker) Serve(ctx context.Context) error {
+	// Enforce every persisted fence synchronously before opening the broker
+	// socket. A broker restart or machine boot therefore cannot create a window
+	// in which a fenced writer is allowed to remain active.
+	if err := b.reconcileWriterFences(ctx); err != nil {
+		return err
+	}
 	socketDirectory := filepath.Dir(b.config.SocketPath)
 	ownerID, groupID := b.socketOwnership()
 	if err := os.MkdirAll(socketDirectory, 0o750); err != nil {
@@ -1352,6 +1496,15 @@ func (b *Broker) Serve(ctx context.Context) error {
 		return err
 	}
 	if err := os.Chown(b.config.SocketPath, ownerID, groupID); err != nil {
+		return err
+	}
+	// Type=notify keeps every configured writer unit ordered behind this point.
+	// Only after active fences have been synchronously restored and the broker
+	// socket is ready may systemd evaluate their persistent Condition markers.
+	if err := notifySystemdReady(); err != nil {
+		return err
+	}
+	if err := b.resumeAuthorizedWriterFenceReleases(ctx); err != nil {
 		return err
 	}
 	go func() {
