@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"math"
+	"strings"
 	"time"
 )
 
@@ -18,9 +19,10 @@ type sourceDatabaseObservation struct {
 }
 
 type sourceDatabaseObserver struct {
-	engine  string
-	inspect func(context.Context) (sourceDatabaseObservation, error)
-	close   func()
+	engine                 string
+	inspect                func(context.Context) (sourceDatabaseObservation, error)
+	logicalSlotRetainedWAL func(context.Context) (int64, error)
+	close                  func()
 }
 
 func (e *NativeExecutor) newSourceDatabaseObserver(ctx context.Context, task TaskEnvelope, inputs map[string]any) (sourceDatabaseObserver, error) {
@@ -38,7 +40,7 @@ func (e *NativeExecutor) newSourceDatabaseObserver(ctx context.Context, task Tas
 			binding.clear()
 			return sourceDatabaseObserver{}, errors.New("source observation requires a source PostgreSQL binding")
 		}
-		return sourceDatabaseObserver{
+		observer := sourceDatabaseObserver{
 			engine: engine, close: binding.clear,
 			inspect: func(sampleContext context.Context) (sourceDatabaseObservation, error) {
 				inspection, inspectErr := e.inspectPostgres(sampleContext, bindingID, binding)
@@ -50,7 +52,24 @@ func (e *NativeExecutor) newSourceDatabaseObserver(ctx context.Context, task Tas
 				}
 				return sourceDatabaseObservation{ManifestDigest: inspection.ManifestDigest, DatabaseBytes: inspection.DatabaseBytes}, nil
 			},
-		}, nil
+		}
+		if mode, _ := inputs["migration_mode"].(string); mode == "postgres-logical" {
+			slot, slotErr := stringInput(inputs, "logical_slot_name")
+			if slotErr != nil || !postgresIdentifierPattern.MatchString(slot) || !strings.HasPrefix(slot, "askio_slot_") {
+				binding.clear()
+				return sourceDatabaseObserver{}, errors.New("PostgreSQL logical estimate slot is invalid")
+			}
+			observer.logicalSlotRetainedWAL = func(sampleContext context.Context) (int64, error) {
+				rows, queryErr := e.queryPostgres(sampleContext, binding, binding.Database,
+					"select coalesce(pg_wal_lsn_diff(pg_current_wal_lsn(),restart_lsn),0)::bigint::text from pg_replication_slots where slot_name="+quotePostgresLiteral(slot))
+				value, parseErr := parseSingleInt(rows)
+				if queryErr != nil || parseErr != nil || value < 0 {
+					return 0, errors.New("PostgreSQL logical estimate slot is unavailable")
+				}
+				return value, nil
+			}
+		}
+		return observer, nil
 	case "mysql", "mariadb":
 		bindingID, binding, err := e.resolveMySQLBinding(ctx, task, inputs)
 		if err != nil {
@@ -171,7 +190,16 @@ func (e *NativeExecutor) sourceEstimate(
 	if err != nil {
 		return nil, err
 	}
-	payloadBytes := inspection.DatabaseBytes + files.TotalBytes
+	databasePayloadBytes := inspection.DatabaseBytes
+	logicalSlotWALBytes := int64(0)
+	if observer.logicalSlotRetainedWAL != nil {
+		logicalSlotWALBytes, err = observer.logicalSlotRetainedWAL(ctx)
+		if err != nil {
+			return nil, err
+		}
+		databasePayloadBytes = logicalSlotWALBytes
+	}
+	payloadBytes := databasePayloadBytes + files.TotalBytes
 	estimatedSeconds := int64(math.Ceil(float64(payloadBytes) / float64(throughputMiB*1024*1024)))
 	if estimatedSeconds < 1 && payloadBytes > 0 {
 		estimatedSeconds = 1
@@ -182,6 +210,8 @@ func (e *NativeExecutor) sourceEstimate(
 		"database_engine":            observer.engine,
 		"database_manifest_digest":   inspection.ManifestDigest,
 		"database_bytes":             inspection.DatabaseBytes,
+		"database_payload_bytes":     databasePayloadBytes,
+		"logical_slot_wal_bytes":     logicalSlotWALBytes,
 		"file_manifest_digest":       files.Digest,
 		"file_bytes":                 files.TotalBytes,
 		"file_count":                 files.FileCount,

@@ -206,3 +206,30 @@ func TestDatabaseBindingPurposesFollowTypedEngineAndEndpoint(t *testing.T) {
 		}
 	}
 }
+
+func TestPostgresLogicalSourceBindingPurposeIsTargetScoped(t *testing.T) {
+	databaseBindingID := "66666666-6666-4666-8666-666666666666"
+	logicalBindingID := "77777777-7777-4777-8777-777777777777"
+	for _, primitive := range []string{
+		"migration.postgres.logical-preflight.v1",
+		"migration.postgres.logical-start-subscription.v1",
+		"migration.postgres.logical-finalize-target.v1",
+	} {
+		task := TaskEnvelope{
+			Primitive: PrimitiveRef{ID: primitive, Version: "1.0.0"},
+			Inputs: map[string]any{"endpoint_role": "target", "inputs": map[string]any{
+				"database_binding_id": databaseBindingID, "logical_source_binding_id": logicalBindingID,
+			}},
+		}
+		if got := expectedBindingPurpose(task, logicalBindingID); got != "postgres.logical-source" {
+			t.Fatalf("%s logical purpose = %q", primitive, got)
+		}
+		if got := expectedBindingPurpose(task, databaseBindingID); got != "postgres.target" {
+			t.Fatalf("%s database purpose = %q", primitive, got)
+		}
+		task.Inputs["endpoint_role"] = "source"
+		if got := expectedBindingPurpose(task, logicalBindingID); got != "" {
+			t.Fatalf("source endpoint unexpectedly received logical source secret purpose %q", got)
+		}
+	}
+}

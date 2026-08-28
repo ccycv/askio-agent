@@ -258,7 +258,7 @@ func (d *Daemon) postHeartbeat(ctx context.Context) error {
 			"migration.security_profile.v1", "migration.discovery.v1", "migration.task_envelope.v1",
 			"migration.preflight.v1", "migration.files_manifest.v1", "migration.compose_inspect.v1",
 			"migration.checkpoint_resume.v1", "migration.validation.v1", "migration.evidence.v1",
-			"migration.cleanup.v1", "migration.maintenance.v1", "migration.postgres_offline.v1",
+			"migration.cleanup.v1", "migration.maintenance.v1", "migration.postgres_offline.v1", "migration.postgres_logical.v1",
 			"migration.mysql_offline.v1", "migration.mongodb_offline.v1", "migration.redis_offline.v1",
 			"migration.compose_isolation.v1", "migration.quiescence.v1",
 		} {

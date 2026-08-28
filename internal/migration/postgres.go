@@ -60,11 +60,12 @@ type postgresDatabaseMapping struct {
 }
 
 type postgresDatabaseContract struct {
-	SchemaVersion    string                    `json:"schema_version"`
-	SourceEngine     string                    `json:"source_engine"`
-	TargetEngine     string                    `json:"target_engine"`
-	DatabaseMappings []postgresDatabaseMapping `json:"database_mappings"`
-	RoleMap          map[string]string         `json:"role_map"`
+	SchemaVersion      string                    `json:"schema_version"`
+	SourceEngine       string                    `json:"source_engine"`
+	TargetEngine       string                    `json:"target_engine"`
+	DatabaseMappings   []postgresDatabaseMapping `json:"database_mappings"`
+	RoleMap            map[string]string         `json:"role_map"`
+	LogicalReplication *postgresLogicalContract  `json:"logical_replication,omitempty"`
 }
 
 func (b *postgresBinding) clear() {
@@ -207,6 +208,9 @@ func validatePostgresDatabaseContract(inputs map[string]any, binding postgresBin
 		MustDigest(contract.RoleMap) != MustDigest(binding.RoleMap) {
 		return errors.New("PostgreSQL database contract identity is invalid")
 	}
+	if err := validatePostgresLogicalContract(contract.LogicalReplication, binding, contract.DatabaseMappings); err != nil {
+		return err
+	}
 	seenSources := map[string]struct{}{}
 	seenTargets := map[string]struct{}{}
 	for index, mapping := range contract.DatabaseMappings {
@@ -265,6 +269,10 @@ func pgpassEscape(value string) string {
 }
 
 func (e *NativeExecutor) runPostgres(ctx context.Context, binding postgresBinding, database, binary string, args ...string) ([]byte, error) {
+	return e.runPostgresInput(ctx, binding, database, binary, nil, args...)
+}
+
+func (e *NativeExecutor) runPostgresInput(ctx context.Context, binding postgresBinding, database, binary string, input []byte, args ...string) ([]byte, error) {
 	temporaryDir, err := os.MkdirTemp(e.stateDir, ".postgres-secret-")
 	if err != nil {
 		return nil, errors.New("database credential staging failed")
@@ -300,6 +308,9 @@ func (e *NativeExecutor) runPostgres(ctx context.Context, binding postgresBindin
 	}
 	command := exec.CommandContext(ctx, binary, args...)
 	command.Env = environment
+	if input != nil {
+		command.Stdin = bytes.NewReader(input)
+	}
 	var stdout, stderr cappedBuffer
 	stdout.limit = 8 * 1024 * 1024
 	stderr.limit = 32 * 1024

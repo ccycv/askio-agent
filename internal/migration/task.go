@@ -288,6 +288,10 @@ func expectedBindingPurpose(task TaskEnvelope, bindingID string) string {
 	if value, _ := inputs["runtime_secret_binding_id"].(string); value == bindingID && task.Primitive.ID == "migration.compose.start-isolated.v1" && endpointRole == "target" {
 		return "compose.runtime-secrets"
 	}
+	if value, _ := inputs["logical_source_binding_id"].(string); value == bindingID && endpointRole == "target" &&
+		strings.HasPrefix(task.Primitive.ID, "migration.postgres.logical-") {
+		return "postgres.logical-source"
+	}
 	if value, _ := inputs["database_binding_id"].(string); value != bindingID {
 		return ""
 	}
@@ -318,9 +322,15 @@ func expectedBindingPurpose(task TaskEnvelope, bindingID string) string {
 		return ""
 	}
 	sourcePrimitive := strings.HasSuffix(task.Primitive.ID, ".inspect.v1") || strings.HasSuffix(task.Primitive.ID, ".dump.v1") ||
-		task.Primitive.ID == "migration.source.estimate.v1" || task.Primitive.ID == "migration.source.verify-quiescence.v1"
+		task.Primitive.ID == "migration.source.estimate.v1" || task.Primitive.ID == "migration.source.verify-quiescence.v1" ||
+		task.Primitive.ID == "migration.postgres.logical-preflight.v1" || task.Primitive.ID == "migration.postgres.logical-schema-dump.v1" ||
+		task.Primitive.ID == "migration.postgres.logical-prepare-source.v1" || task.Primitive.ID == "migration.postgres.logical-finalize-source.v1" ||
+		task.Primitive.ID == "migration.postgres.logical-cleanup-source.v1"
 	targetPrimitive := strings.HasSuffix(task.Primitive.ID, ".inspect.v1") || strings.HasSuffix(task.Primitive.ID, ".reset-empty-target.v1") ||
-		strings.HasSuffix(task.Primitive.ID, ".restore.v1") || strings.HasSuffix(task.Primitive.ID, ".verify.v1")
+		strings.HasSuffix(task.Primitive.ID, ".restore.v1") || strings.HasSuffix(task.Primitive.ID, ".verify.v1") ||
+		task.Primitive.ID == "migration.postgres.logical-preflight.v1" || task.Primitive.ID == "migration.postgres.logical-restore-schema.v1" ||
+		task.Primitive.ID == "migration.postgres.logical-start-subscription.v1" || task.Primitive.ID == "migration.postgres.logical-finalize-target.v1" ||
+		task.Primitive.ID == "migration.postgres.logical-cleanup-target.v1"
 	if endpointRole == "source" && sourcePrimitive {
 		return family + ".source"
 	}

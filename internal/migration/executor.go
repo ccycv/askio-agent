@@ -27,7 +27,16 @@ var supportedPrimitives = map[string]struct{}{
 	"migration.postgres.inspect.v1": {}, "migration.postgres.dump.v1": {},
 	"migration.postgres.reset-empty-target.v1": {}, "migration.postgres.restore.v1": {},
 	"migration.postgres.verify.v1": {}, "migration.compose.inspect.v1": {},
-	"migration.mysql.inspect.v1": {}, "migration.mysql.dump.v1": {},
+	"migration.postgres.logical-preflight.v1":          {},
+	"migration.postgres.logical-schema-dump.v1":        {},
+	"migration.postgres.logical-restore-schema.v1":     {},
+	"migration.postgres.logical-prepare-source.v1":     {},
+	"migration.postgres.logical-start-subscription.v1": {},
+	"migration.postgres.logical-finalize-source.v1":    {},
+	"migration.postgres.logical-finalize-target.v1":    {},
+	"migration.postgres.logical-cleanup-target.v1":     {},
+	"migration.postgres.logical-cleanup-source.v1":     {},
+	"migration.mysql.inspect.v1":                       {}, "migration.mysql.dump.v1": {},
 	"migration.mysql.reset-empty-target.v1": {}, "migration.mysql.restore.v1": {},
 	"migration.mysql.verify.v1":    {},
 	"migration.mongodb.inspect.v1": {}, "migration.mongodb.dump.v1": {},
@@ -385,6 +394,24 @@ func (e *NativeExecutor) Execute(ctx context.Context, task TaskEnvelope, progres
 		outputs, err = e.postgresRestore(ctx, task, inputs, progress)
 	case "migration.postgres.verify.v1":
 		outputs, err = e.postgresVerify(ctx, task, inputs)
+	case "migration.postgres.logical-preflight.v1":
+		outputs, err = e.postgresLogicalPreflight(ctx, task, inputs)
+	case "migration.postgres.logical-schema-dump.v1":
+		outputs, err = e.postgresLogicalSchemaDump(ctx, task, inputs, progress)
+	case "migration.postgres.logical-restore-schema.v1":
+		outputs, err = e.postgresLogicalRestoreSchema(ctx, task, inputs)
+	case "migration.postgres.logical-prepare-source.v1":
+		outputs, err = e.postgresLogicalPrepareSource(ctx, task, inputs)
+	case "migration.postgres.logical-start-subscription.v1":
+		outputs, err = e.postgresLogicalStartSubscription(ctx, task, inputs, progress)
+	case "migration.postgres.logical-finalize-source.v1":
+		outputs, err = e.postgresLogicalFinalizeSource(ctx, task, inputs, progress)
+	case "migration.postgres.logical-finalize-target.v1":
+		outputs, err = e.postgresLogicalFinalizeTarget(ctx, task, inputs, progress)
+	case "migration.postgres.logical-cleanup-target.v1":
+		outputs, err = e.postgresLogicalCleanupTarget(ctx, task, inputs)
+	case "migration.postgres.logical-cleanup-source.v1":
+		outputs, err = e.postgresLogicalCleanupSource(ctx, task, inputs)
 	case "migration.mysql.inspect.v1":
 		outputs, err = e.mysqlInspect(ctx, task, inputs)
 	case "migration.mysql.dump.v1":
