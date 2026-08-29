@@ -21,6 +21,7 @@ import (
 
 const (
 	postgresBindingSchema     = "operations.migration.postgres-binding.v1"
+	postgresBindingSchemaV2   = "operations.migration.postgres-binding.v2"
 	postgresACLArtifactSchema = "operations.migration.postgres-acl.v1"
 	postgresACLArtifactHandle = "database.acl.json"
 	maximumPostgresACLBytes   = int64(16 * 1024 * 1024)
@@ -39,6 +40,7 @@ type postgresBinding struct {
 	Host                string            `json:"host"`
 	Port                int               `json:"port"`
 	Database            string            `json:"database"`
+	Databases           []string          `json:"databases,omitempty"`
 	MaintenanceDatabase string            `json:"maintenance_database"`
 	Username            string            `json:"username"`
 	Password            string            `json:"password"`
@@ -50,6 +52,20 @@ type postgresBinding struct {
 	TargetEncoding      string            `json:"target_encoding,omitempty"`
 	TargetCollation     string            `json:"target_collation,omitempty"`
 	TargetCType         string            `json:"target_ctype,omitempty"`
+}
+
+type postgresDatabaseMapping struct {
+	SourceDatabase string `json:"source_database"`
+	TargetDatabase string `json:"target_database"`
+}
+
+type postgresDatabaseContract struct {
+	SchemaVersion      string                    `json:"schema_version"`
+	SourceEngine       string                    `json:"source_engine"`
+	TargetEngine       string                    `json:"target_engine"`
+	DatabaseMappings   []postgresDatabaseMapping `json:"database_mappings"`
+	RoleMap            map[string]string         `json:"role_map"`
+	LogicalReplication *postgresLogicalContract  `json:"logical_replication,omitempty"`
 }
 
 func (b *postgresBinding) clear() {
@@ -87,10 +103,34 @@ func parsePostgresBinding(raw []byte) (postgresBinding, error) {
 	if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) {
 		return postgresBinding{}, errors.New("database binding contains trailing data")
 	}
-	if binding.SchemaVersion != postgresBindingSchema || (binding.Mode != "source" && binding.Mode != "target") {
+	if (binding.SchemaVersion != postgresBindingSchema && binding.SchemaVersion != postgresBindingSchemaV2) || (binding.Mode != "source" && binding.Mode != "target") {
 		return postgresBinding{}, errors.New("database binding contract is unsupported")
 	}
-	if binding.Port < 1 || binding.Port > 65535 || !postgresIdentifierPattern.MatchString(binding.Database) ||
+	if binding.SchemaVersion == postgresBindingSchema {
+		if len(binding.Databases) != 0 || !postgresIdentifierPattern.MatchString(binding.Database) {
+			return postgresBinding{}, errors.New("database binding contains an invalid database scope")
+		}
+		binding.Databases = []string{binding.Database}
+	} else {
+		if binding.Database != "" || len(binding.Databases) < 1 || len(binding.Databases) > 8 {
+			return postgresBinding{}, errors.New("database-set binding requires between one and eight database names")
+		}
+		seen := map[string]struct{}{}
+		for _, database := range binding.Databases {
+			if !postgresIdentifierPattern.MatchString(database) || database == "postgres" || database == "template0" || database == "template1" {
+				return postgresBinding{}, errors.New("database-set binding contains a system or invalid database")
+			}
+			if _, exists := seen[database]; exists {
+				return postgresBinding{}, errors.New("database-set binding contains a duplicate database")
+			}
+			if binding.Mode == "target" && !strings.HasPrefix(database, "askio_mig_") {
+				return postgresBinding{}, errors.New("every target database must use the migration namespace")
+			}
+			seen[database] = struct{}{}
+		}
+		binding.Database = binding.Databases[0]
+	}
+	if binding.Port < 1 || binding.Port > 65535 ||
 		!postgresIdentifierPattern.MatchString(binding.MaintenanceDatabase) || !postgresIdentifierPattern.MatchString(binding.Username) {
 		return postgresBinding{}, errors.New("database binding contains an invalid identifier or port")
 	}
@@ -130,6 +170,74 @@ func parsePostgresBinding(raw []byte) (postgresBinding, error) {
 	return binding, nil
 }
 
+func postgresDatabaseScopes(binding postgresBinding) []postgresBinding {
+	scopes := make([]postgresBinding, 0, len(binding.Databases))
+	for _, database := range binding.Databases {
+		scope := binding
+		scope.Database = database
+		scope.Databases = []string{database}
+		scopes = append(scopes, scope)
+	}
+	return scopes
+}
+
+func validatePostgresDatabaseContract(inputs map[string]any, binding postgresBinding) error {
+	raw, provided := inputs["database_contract"]
+	if !provided {
+		if binding.SchemaVersion == postgresBindingSchemaV2 {
+			return errors.New("database-set bindings require a database contract")
+		}
+		return nil
+	}
+	encoded, err := json.Marshal(raw)
+	if err != nil || len(encoded) > 64*1024 {
+		return errors.New("PostgreSQL database contract is invalid")
+	}
+	var contract postgresDatabaseContract
+	decoder := json.NewDecoder(bytes.NewReader(encoded))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&contract); err != nil {
+		return errors.New("PostgreSQL database contract is invalid")
+	}
+	var trailing any
+	if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) {
+		return errors.New("PostgreSQL database contract contains trailing data")
+	}
+	if contract.SchemaVersion != "operations.migration.database-contract.v1" || contract.SourceEngine != "postgresql" ||
+		contract.TargetEngine != "postgresql" || len(contract.DatabaseMappings) != len(binding.Databases) ||
+		MustDigest(contract.RoleMap) != MustDigest(binding.RoleMap) {
+		return errors.New("PostgreSQL database contract identity is invalid")
+	}
+	if err := validatePostgresLogicalContract(contract.LogicalReplication, binding, contract.DatabaseMappings); err != nil {
+		return err
+	}
+	seenSources := map[string]struct{}{}
+	seenTargets := map[string]struct{}{}
+	for index, mapping := range contract.DatabaseMappings {
+		if !postgresIdentifierPattern.MatchString(mapping.SourceDatabase) || !postgresIdentifierPattern.MatchString(mapping.TargetDatabase) ||
+			mapping.SourceDatabase == "postgres" || mapping.SourceDatabase == "template0" || mapping.SourceDatabase == "template1" ||
+			!strings.HasPrefix(mapping.TargetDatabase, "askio_mig_") {
+			return errors.New("PostgreSQL database contract contains an unsafe mapping")
+		}
+		if _, exists := seenSources[mapping.SourceDatabase]; exists {
+			return errors.New("PostgreSQL database contract contains a duplicate source")
+		}
+		if _, exists := seenTargets[mapping.TargetDatabase]; exists {
+			return errors.New("PostgreSQL database contract contains a duplicate target")
+		}
+		seenSources[mapping.SourceDatabase] = struct{}{}
+		seenTargets[mapping.TargetDatabase] = struct{}{}
+		expected := mapping.SourceDatabase
+		if binding.Mode == "target" {
+			expected = mapping.TargetDatabase
+		}
+		if binding.Databases[index] != expected {
+			return errors.New("PostgreSQL binding database order does not match the database contract")
+		}
+	}
+	return nil
+}
+
 type cappedBuffer struct {
 	buffer bytes.Buffer
 	limit  int
@@ -161,6 +269,10 @@ func pgpassEscape(value string) string {
 }
 
 func (e *NativeExecutor) runPostgres(ctx context.Context, binding postgresBinding, database, binary string, args ...string) ([]byte, error) {
+	return e.runPostgresInput(ctx, binding, database, binary, nil, args...)
+}
+
+func (e *NativeExecutor) runPostgresInput(ctx context.Context, binding postgresBinding, database, binary string, input []byte, args ...string) ([]byte, error) {
 	temporaryDir, err := os.MkdirTemp(e.stateDir, ".postgres-secret-")
 	if err != nil {
 		return nil, errors.New("database credential staging failed")
@@ -196,6 +308,9 @@ func (e *NativeExecutor) runPostgres(ctx context.Context, binding postgresBindin
 	}
 	command := exec.CommandContext(ctx, binary, args...)
 	command.Env = environment
+	if input != nil {
+		command.Stdin = bytes.NewReader(input)
+	}
 	var stdout, stderr cappedBuffer
 	stdout.limit = 8 * 1024 * 1024
 	stderr.limit = 32 * 1024
@@ -678,6 +793,83 @@ func postgresInspectionOutputs(inspection postgresInspection) map[string]any {
 	}
 }
 
+type postgresDatabaseSetInspection struct {
+	Members            []postgresInspection
+	ManifestDigest     string
+	EmptyTargetDigest  string
+	RequiredExtensions []string
+	TotalRows          int64
+	DatabaseBytes      int64
+}
+
+func inspectPostgresDatabaseSet(ctx context.Context, executor *NativeExecutor, bindingID string, binding postgresBinding) (postgresDatabaseSetInspection, error) {
+	set := postgresDatabaseSetInspection{Members: []postgresInspection{}, RequiredExtensions: []string{}}
+	extensions := map[string]struct{}{}
+	manifestMembers := make([]map[string]any, 0, len(binding.Databases))
+	emptyMembers := make([]map[string]any, 0, len(binding.Databases))
+	for ordinal, scope := range postgresDatabaseScopes(binding) {
+		inspection, err := executor.inspectPostgres(ctx, bindingID, scope)
+		if err != nil {
+			return postgresDatabaseSetInspection{}, err
+		}
+		set.Members = append(set.Members, inspection)
+		set.TotalRows += inspection.TotalRows
+		set.DatabaseBytes += inspection.DatabaseBytes
+		manifestMembers = append(manifestMembers, map[string]any{"ordinal": ordinal, "manifest_digest": inspection.ManifestDigest})
+		emptyMembers = append(emptyMembers, map[string]any{
+			"ordinal": ordinal, "database": scope.Database, "empty_target_digest": inspection.EmptyTargetDigest,
+		})
+		for _, extension := range inspection.Manifest.Extensions {
+			extensions[extension] = struct{}{}
+		}
+	}
+	for extension := range extensions {
+		set.RequiredExtensions = append(set.RequiredExtensions, extension)
+	}
+	sort.Strings(set.RequiredExtensions)
+	var err error
+	set.ManifestDigest, err = Digest(map[string]any{
+		"schema_version": "operations.migration.postgres-database-set-manifest.v1", "members": manifestMembers,
+	})
+	if err != nil {
+		return postgresDatabaseSetInspection{}, err
+	}
+	set.EmptyTargetDigest, err = Digest(map[string]any{
+		"schema_version": "operations.migration.postgres-database-set-empty-target.v1", "binding_id": bindingID,
+		"database_identity": MustDigest(map[string]any{"host": binding.Host, "port": binding.Port, "databases": binding.Databases}),
+		"members":           emptyMembers, "role_map_digest": MustDigest(binding.RoleMap),
+	})
+	return set, err
+}
+
+func postgresDatabaseSetOutputs(set postgresDatabaseSetInspection) map[string]any {
+	allEmpty := true
+	allExist := true
+	manifestDigests := make([]string, 0, len(set.Members))
+	for _, member := range set.Members {
+		allEmpty = allEmpty && member.Empty
+		allExist = allExist && member.Exists
+		manifestDigests = append(manifestDigests, member.ManifestDigest)
+	}
+	serverVersion := 0
+	if len(set.Members) > 0 {
+		serverVersion = set.Members[0].ServerVersionNumber
+	}
+	return map[string]any{
+		"exists": allExist, "empty": allEmpty, "database_count": len(set.Members),
+		"server_version_number": serverVersion, "server_major": serverVersion / 10000,
+		"required_extensions":      append([]string{}, set.RequiredExtensions...),
+		"database_manifest_digest": set.ManifestDigest, "database_manifest_digests": manifestDigests,
+		"empty_target_digest": set.EmptyTargetDigest, "role_map_digest": func() string {
+			if len(set.Members) == 0 {
+				return ""
+			}
+			return set.Members[0].RoleMapDigest
+		}(),
+		"total_rows": set.TotalRows, "database_bytes": set.DatabaseBytes,
+	}
+}
+
 func requiredPostgresExtensionsInput(inputs map[string]any) ([]string, error) {
 	raw, present := inputs["required_extensions"]
 	if !present {
@@ -820,6 +1012,13 @@ func (e *NativeExecutor) savePostgresMarker(bindingID string, marker postgresRes
 }
 
 func writePostgresACLArtifact(directory string, inspection postgresInspection) (string, int64, error) {
+	return writePostgresACLArtifactNamed(directory, postgresACLArtifactHandle, inspection)
+}
+
+func writePostgresACLArtifactNamed(directory, handle string, inspection postgresInspection) (string, int64, error) {
+	if !fileNamePattern.MatchString(handle) {
+		return "", 0, errors.New("database privilege artifact handle is invalid")
+	}
 	artifact := postgresACLArtifact{
 		SchemaVersion: postgresACLArtifactSchema,
 		RoleMapDigest: inspection.RoleMapDigest,
@@ -830,7 +1029,7 @@ func writePostgresACLArtifact(directory string, inspection postgresInspection) (
 		return "", 0, errors.New("database privilege artifact exceeds its safety limit")
 	}
 	data = append(data, '\n')
-	path := filepath.Join(directory, postgresACLArtifactHandle)
+	path := filepath.Join(directory, handle)
 	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
 	if err != nil {
 		return "", 0, err
@@ -992,7 +1191,115 @@ func (e *NativeExecutor) resolvePostgresBinding(ctx context.Context, task TaskEn
 	}
 	defer zeroBytes(raw)
 	binding, err := parsePostgresBinding(raw)
-	return bindingID, binding, err
+	if err != nil {
+		return "", postgresBinding{}, err
+	}
+	if err := validatePostgresDatabaseContract(inputs, binding); err != nil {
+		binding.clear()
+		return "", postgresBinding{}, err
+	}
+	return bindingID, binding, nil
+}
+
+type postgresDatabaseBundleMember struct {
+	Ordinal            int    `json:"ordinal"`
+	SourceDatabase     string `json:"source_database"`
+	DumpArtifactHandle string `json:"dump_artifact_handle"`
+	DumpArtifactDigest string `json:"dump_artifact_digest"`
+	DumpSizeBytes      int64  `json:"dump_size_bytes"`
+	ACLArtifactHandle  string `json:"acl_artifact_handle"`
+	ACLArtifactDigest  string `json:"acl_artifact_digest"`
+	ACLSizeBytes       int64  `json:"acl_size_bytes"`
+	ManifestDigest     string `json:"manifest_digest"`
+	RoleMapDigest      string `json:"role_map_digest"`
+}
+
+type postgresDatabaseBundle struct {
+	SchemaVersion           string                         `json:"schema_version"`
+	AggregateManifestDigest string                         `json:"aggregate_manifest_digest"`
+	Members                 []postgresDatabaseBundleMember `json:"members"`
+}
+
+const postgresDatabaseBundleHandle = "databases.bundle.json"
+
+func writePostgresDatabaseBundle(directory string, bundle postgresDatabaseBundle) (string, int64, error) {
+	data, err := json.Marshal(bundle)
+	if err != nil || len(data) < 1 || int64(len(data)) > maximumPostgresACLBytes {
+		return "", 0, errors.New("PostgreSQL database bundle exceeds its safety limit")
+	}
+	data = append(data, '\n')
+	path := filepath.Join(directory, postgresDatabaseBundleHandle)
+	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		return "", 0, err
+	}
+	remove := true
+	defer func() {
+		if remove {
+			_ = os.Remove(path)
+		}
+	}()
+	if _, err := file.Write(data); err != nil {
+		_ = file.Close()
+		return "", 0, err
+	}
+	if err := file.Sync(); err != nil {
+		_ = file.Close()
+		return "", 0, err
+	}
+	if err := file.Close(); err != nil {
+		return "", 0, err
+	}
+	digest, size, err := fileSHA256(path)
+	if err != nil {
+		return "", 0, err
+	}
+	remove = false
+	return digest, size, nil
+}
+
+func readPostgresDatabaseBundle(path, expectedDigest string, binding postgresBinding) (postgresDatabaseBundle, error) {
+	digest, _, err := fileSHA256(path)
+	if err != nil || digest != expectedDigest {
+		return postgresDatabaseBundle{}, errors.New("PostgreSQL database bundle digest verification failed")
+	}
+	file, info, err := openRegularNoFollow(path)
+	if err != nil || info.Size() < 1 || info.Size() > maximumPostgresACLBytes {
+		if file != nil {
+			_ = file.Close()
+		}
+		return postgresDatabaseBundle{}, errors.New("PostgreSQL database bundle is unsafe")
+	}
+	defer file.Close()
+	decoder := json.NewDecoder(io.LimitReader(file, maximumPostgresACLBytes+1))
+	decoder.DisallowUnknownFields()
+	var bundle postgresDatabaseBundle
+	if err := decoder.Decode(&bundle); err != nil {
+		return postgresDatabaseBundle{}, errors.New("PostgreSQL database bundle is invalid")
+	}
+	var trailing any
+	if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) {
+		return postgresDatabaseBundle{}, errors.New("PostgreSQL database bundle contains trailing data")
+	}
+	if bundle.SchemaVersion != "operations.migration.postgres-database-bundle.v1" || len(bundle.Members) != len(binding.Databases) {
+		return postgresDatabaseBundle{}, errors.New("PostgreSQL database bundle contract is invalid")
+	}
+	seenSources := map[string]struct{}{}
+	for index, member := range bundle.Members {
+		if member.Ordinal != index || !postgresIdentifierPattern.MatchString(member.SourceDatabase) ||
+			member.DumpArtifactHandle != "database-"+strconv.Itoa(index+1)+".dump" ||
+			member.ACLArtifactHandle != "database-"+strconv.Itoa(index+1)+".acl.json" ||
+			!fileDigestPattern.MatchString(member.DumpArtifactDigest) || !fileDigestPattern.MatchString(member.ACLArtifactDigest) ||
+			!fileDigestPattern.MatchString(member.ManifestDigest) || member.RoleMapDigest != MustDigest(binding.RoleMap) ||
+			member.DumpSizeBytes < 1 || member.ACLSizeBytes < 1 {
+			return postgresDatabaseBundle{}, errors.New("PostgreSQL database bundle member is invalid")
+		}
+		if _, exists := seenSources[member.SourceDatabase]; exists {
+			return postgresDatabaseBundle{}, errors.New("PostgreSQL database bundle contains a duplicate source")
+		}
+		seenSources[member.SourceDatabase] = struct{}{}
+	}
+	return bundle, nil
 }
 
 func (e *NativeExecutor) postgresInspect(ctx context.Context, task TaskEnvelope, inputs map[string]any) (map[string]any, error) {
@@ -1001,6 +1308,37 @@ func (e *NativeExecutor) postgresInspect(ctx context.Context, task TaskEnvelope,
 		return nil, err
 	}
 	defer binding.clear()
+	if len(binding.Databases) > 1 {
+		set, err := inspectPostgresDatabaseSet(ctx, e, bindingID, binding)
+		if err != nil {
+			return nil, err
+		}
+		if set.DatabaseBytes > maximumPostgresBytes {
+			return nil, errors.New("PostgreSQL database set exceeds the supported aggregate size")
+		}
+		for _, inspection := range set.Members {
+			if inspection.NonDefaultTablespaceCount > 0 || inspection.ServerVersionNumber/10000 < 14 || inspection.ServerVersionNumber/10000 > 17 {
+				return nil, errors.New("a PostgreSQL database-set member is outside the supported offline matrix")
+			}
+		}
+		if len(set.Members) == 0 {
+			return nil, errors.New("PostgreSQL database set is empty")
+		}
+		if err := e.verifyPostgresCompatibility(ctx, postgresDatabaseScopes(binding)[0], inputs, set.Members[0]); err != nil {
+			return nil, err
+		}
+		if requireEmpty, ok := inputs["require_empty_target"].(bool); ok && requireEmpty {
+			if binding.Mode != "target" || !binding.ResetAllowed {
+				return nil, errors.New("target database set is not reset-enabled")
+			}
+			for index, inspection := range set.Members {
+				if !strings.HasPrefix(binding.Databases[index], "askio_mig_") || !inspection.Empty {
+					return nil, errors.New("every target database-set member must be new or empty in the migration namespace")
+				}
+			}
+		}
+		return postgresDatabaseSetOutputs(set), nil
+	}
 	inspection, err := e.inspectPostgres(ctx, bindingID, binding)
 	if err != nil {
 		return nil, err
@@ -1034,6 +1372,9 @@ func (e *NativeExecutor) postgresDump(ctx context.Context, task TaskEnvelope, in
 	defer binding.clear()
 	if binding.Mode != "source" {
 		return nil, errors.New("PostgreSQL dump requires a source binding")
+	}
+	if len(binding.Databases) > 1 {
+		return e.postgresDumpDatabaseSet(ctx, task, inputs, bindingID, binding, progress)
 	}
 	inspection, err := e.inspectPostgres(ctx, bindingID, binding)
 	if err != nil {
@@ -1129,12 +1470,113 @@ func (e *NativeExecutor) postgresDump(ctx context.Context, task TaskEnvelope, in
 	}, nil
 }
 
+func (e *NativeExecutor) postgresDumpDatabaseSet(ctx context.Context, task TaskEnvelope, inputs map[string]any, bindingID string, binding postgresBinding, progress func(string, int64, *int64) error) (map[string]any, error) {
+	set, err := inspectPostgresDatabaseSet(ctx, e, bindingID, binding)
+	if err != nil {
+		return nil, err
+	}
+	if set.DatabaseBytes > maximumPostgresBytes {
+		return nil, errors.New("PostgreSQL database set exceeds the supported aggregate size")
+	}
+	for _, inspection := range set.Members {
+		if !inspection.Exists || inspection.NonDefaultTablespaceCount > 0 {
+			return nil, errors.New("a source database-set member is missing or uses unsupported tablespaces")
+		}
+	}
+	stagingHandle, err := stringInput(inputs, "staging_root_handle")
+	if err != nil {
+		return nil, err
+	}
+	stagingRoot, err := e.resolver.Resolve(stagingHandle, ".", false)
+	if err != nil {
+		return nil, err
+	}
+	if err := e.ensureCapacity(stagingRoot, set.DatabaseBytes); err != nil {
+		return nil, err
+	}
+	relative, directory, err := mysqlArtifactLocation(e, task, stagingHandle, "postgres-set", set.ManifestDigest)
+	if err != nil {
+		return nil, err
+	}
+	pgDump, err := fixedPostgresExecutable("pg_dump")
+	if err != nil {
+		return nil, err
+	}
+	bundle := postgresDatabaseBundle{
+		SchemaVersion:           "operations.migration.postgres-database-bundle.v1",
+		AggregateManifestDigest: set.ManifestDigest, Members: []postgresDatabaseBundleMember{},
+	}
+	var archiveBytes int64
+	for index, scope := range postgresDatabaseScopes(binding) {
+		inspection := set.Members[index]
+		if err := progress("postgres_database_set_dump", int64(index), func() *int64 { value := int64(len(set.Members)); return &value }()); err != nil {
+			return nil, err
+		}
+		dumpHandle := "database-" + strconv.Itoa(index+1) + ".dump"
+		dumpPath := filepath.Join(directory, dumpHandle)
+		partialPath := dumpPath + ".partial"
+		if _, err := e.runPostgres(ctx, scope, scope.Database, pgDump,
+			"--format=custom", "--compress=6", "--no-owner", "--no-privileges", "--lock-wait-timeout=5000", "--file="+partialPath); err != nil {
+			_ = os.Remove(partialPath)
+			return nil, err
+		}
+		if err := os.Chmod(partialPath, 0o600); err != nil {
+			_ = os.Remove(partialPath)
+			return nil, err
+		}
+		dumpDigest, dumpSize, err := fileSHA256(partialPath)
+		if err != nil {
+			_ = os.Remove(partialPath)
+			return nil, err
+		}
+		if err := os.Rename(partialPath, dumpPath); err != nil {
+			_ = os.Remove(partialPath)
+			return nil, err
+		}
+		aclHandle := "database-" + strconv.Itoa(index+1) + ".acl.json"
+		aclDigest, aclSize, err := writePostgresACLArtifactNamed(directory, aclHandle, inspection)
+		if err != nil {
+			return nil, err
+		}
+		archiveBytes += dumpSize
+		bundle.Members = append(bundle.Members, postgresDatabaseBundleMember{
+			Ordinal: index, SourceDatabase: scope.Database, DumpArtifactHandle: dumpHandle,
+			DumpArtifactDigest: dumpDigest, DumpSizeBytes: dumpSize, ACLArtifactHandle: aclHandle,
+			ACLArtifactDigest: aclDigest, ACLSizeBytes: aclSize, ManifestDigest: inspection.ManifestDigest,
+			RoleMapDigest: inspection.RoleMapDigest,
+		})
+	}
+	bundleDigest, bundleSize, err := writePostgresDatabaseBundle(directory, bundle)
+	if err != nil {
+		return nil, err
+	}
+	transferManifest, err := buildFileManifest(ctx, directory, nil)
+	if err != nil {
+		return nil, err
+	}
+	if err := progress("postgres_database_set_dump_complete", archiveBytes, &archiveBytes); err != nil {
+		return nil, err
+	}
+	return map[string]any{
+		"dump_artifact_handle": postgresDatabaseBundleHandle, "dump_staging_relative_handle": relative,
+		"dump_artifact_digest": bundleDigest, "dump_transfer_manifest_digest": transferManifest.Digest,
+		"dump_size_bytes": transferManifest.TotalBytes, "dump_archive_size_bytes": archiveBytes,
+		"acl_artifact_handle": postgresDatabaseBundleHandle, "acl_artifact_digest": bundleDigest,
+		"acl_artifact_size_bytes": bundleSize, "database_manifest_digest": set.ManifestDigest,
+		"role_map_digest": MustDigest(binding.RoleMap), "database_count": len(bundle.Members),
+		"server_major": set.Members[0].Manifest.ServerMajor,
+	}, nil
+}
+
 func (e *NativeExecutor) postgresReset(ctx context.Context, task TaskEnvelope, inputs map[string]any) (map[string]any, error) {
 	bindingID, binding, err := e.resolvePostgresBinding(ctx, task, inputs)
 	if err != nil {
 		return nil, err
 	}
 	defer binding.clear()
+	if len(binding.Databases) > 1 {
+		return e.postgresResetDatabaseSet(ctx, task, inputs, bindingID, binding)
+	}
 	if binding.Mode != "target" || !binding.ResetAllowed || !strings.HasPrefix(binding.Database, "askio_mig_") {
 		return nil, errors.New("target database reset is not explicitly constrained")
 	}
@@ -1202,6 +1644,94 @@ func (e *NativeExecutor) postgresReset(ctx context.Context, task TaskEnvelope, i
 	return map[string]any{"database_identity_digest": databaseIdentity, "reset_generation": generation, "empty": true}, nil
 }
 
+func (e *NativeExecutor) postgresResetDatabaseSet(ctx context.Context, task TaskEnvelope, inputs map[string]any, bindingID string, binding postgresBinding) (map[string]any, error) {
+	if binding.Mode != "target" || !binding.ResetAllowed {
+		return nil, errors.New("target PostgreSQL database-set reset is not explicitly constrained")
+	}
+	expectedDigest, err := stringInput(inputs, "expected_empty_target_digest")
+	if err != nil || !fileDigestPattern.MatchString(expectedDigest) {
+		return nil, errors.New("expected database-set empty-target digest is invalid")
+	}
+	set, err := inspectPostgresDatabaseSet(ctx, e, bindingID, binding)
+	if err != nil {
+		return nil, err
+	}
+	marker, markerErr := e.loadPostgresMarker(bindingID)
+	databaseIdentity := MustDigest(map[string]any{"host": binding.Host, "port": binding.Port, "databases": binding.Databases})
+	ownedByRun := markerErr == nil && marker.MigrationID == task.MigrationID && marker.BindingID == bindingID &&
+		marker.DatabaseIdentity == databaseIdentity && marker.InitialEmptyDigest == expectedDigest
+	allEmpty := true
+	for index, inspection := range set.Members {
+		allEmpty = allEmpty && inspection.Empty && strings.HasPrefix(binding.Databases[index], "askio_mig_")
+	}
+	if (!allEmpty || set.EmptyTargetDigest != expectedDigest) && !ownedByRun {
+		return nil, errors.New("target PostgreSQL database set is not the approved empty target and is not owned by this migration")
+	}
+	roleRows, err := e.queryPostgres(ctx, binding, binding.MaintenanceDatabase, "select count(*) from pg_roles where rolname="+quotePostgresLiteral(binding.TargetRole))
+	if err != nil {
+		return nil, err
+	}
+	roleCount, err := parseSingleInt(roleRows)
+	if err != nil || roleCount != 1 {
+		return nil, errors.New("declared target role is not pre-created")
+	}
+	generation := 1
+	initialDigest := expectedDigest
+	if ownedByRun {
+		generation = marker.Generation + 1
+		initialDigest = marker.InitialEmptyDigest
+	}
+	marker = postgresResetMarker{
+		SchemaVersion: "operations.migration.postgres-reset-marker.v1", MigrationID: task.MigrationID,
+		BindingID: bindingID, DatabaseIdentity: databaseIdentity, InitialEmptyDigest: initialDigest,
+		Generation: generation, UpdatedAt: time.Now().UTC().Format(time.RFC3339Nano),
+	}
+	// Persist ownership before the first mutation so a partial multi-database
+	// reset remains safely retryable by this run and no other run.
+	if err := e.savePostgresMarker(bindingID, marker); err != nil {
+		return nil, err
+	}
+	for _, scope := range postgresDatabaseScopes(binding) {
+		inspection, err := e.inspectPostgres(ctx, bindingID, scope)
+		if err != nil {
+			return nil, err
+		}
+		if inspection.Exists {
+			if _, err := e.queryPostgres(ctx, scope, scope.MaintenanceDatabase,
+				"select pg_terminate_backend(pid) from pg_stat_activity where datname="+quotePostgresLiteral(scope.Database)+" and pid<>pg_backend_pid()"); err != nil {
+				return nil, err
+			}
+			if _, err := e.queryPostgres(ctx, scope, scope.MaintenanceDatabase, "drop database "+quotePostgresIdentifier(scope.Database)); err != nil {
+				return nil, err
+			}
+		}
+		create := "create database " + quotePostgresIdentifier(scope.Database) + " with owner " + quotePostgresIdentifier(scope.TargetRole) + " template template0"
+		if scope.TargetEncoding != "" {
+			if len(scope.TargetEncoding) > 32 || strings.ContainsAny(scope.TargetEncoding, "\x00\r\n") {
+				return nil, errors.New("target database encoding is invalid")
+			}
+			create += " encoding " + quotePostgresLiteral(scope.TargetEncoding)
+		}
+		if scope.TargetCollation != "" || scope.TargetCType != "" {
+			if scope.TargetCollation == "" || scope.TargetCType == "" || len(scope.TargetCollation) > 128 || len(scope.TargetCType) > 128 || strings.ContainsAny(scope.TargetCollation+scope.TargetCType, "\x00\r\n") {
+				return nil, errors.New("target database locale is invalid")
+			}
+			create += " lc_collate " + quotePostgresLiteral(scope.TargetCollation) + " lc_ctype " + quotePostgresLiteral(scope.TargetCType)
+		}
+		if _, err := e.queryPostgres(ctx, scope, scope.MaintenanceDatabase, create); err != nil {
+			return nil, err
+		}
+	}
+	marker.UpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)
+	if err := e.savePostgresMarker(bindingID, marker); err != nil {
+		return nil, err
+	}
+	return map[string]any{
+		"database_identity_digest": databaseIdentity, "reset_generation": generation,
+		"empty": true, "database_count": len(binding.Databases),
+	}, nil
+}
+
 func (e *NativeExecutor) postgresRestore(ctx context.Context, task TaskEnvelope, inputs map[string]any, progress func(string, int64, *int64) error) (map[string]any, error) {
 	bindingID, binding, err := e.resolvePostgresBinding(ctx, task, inputs)
 	if err != nil {
@@ -1210,6 +1740,9 @@ func (e *NativeExecutor) postgresRestore(ctx context.Context, task TaskEnvelope,
 	defer binding.clear()
 	if binding.Mode != "target" {
 		return nil, errors.New("PostgreSQL restore requires a target binding")
+	}
+	if len(binding.Databases) > 1 {
+		return e.postgresRestoreDatabaseSet(ctx, task, inputs, bindingID, binding, progress)
 	}
 	marker, err := e.loadPostgresMarker(bindingID)
 	if err != nil || marker.MigrationID != task.MigrationID {
@@ -1302,12 +1835,149 @@ func (e *NativeExecutor) postgresRestore(ctx context.Context, task TaskEnvelope,
 	}, nil
 }
 
+func (e *NativeExecutor) postgresRestoreDatabaseSet(ctx context.Context, task TaskEnvelope, inputs map[string]any, bindingID string, binding postgresBinding, progress func(string, int64, *int64) error) (map[string]any, error) {
+	marker, err := e.loadPostgresMarker(bindingID)
+	if err != nil || marker.MigrationID != task.MigrationID || marker.DatabaseIdentity != MustDigest(map[string]any{"host": binding.Host, "port": binding.Port, "databases": binding.Databases}) {
+		return nil, errors.New("target PostgreSQL database-set reset ownership is unproven")
+	}
+	stagingHandle, err := stringInput(inputs, "staging_root_handle")
+	if err != nil {
+		return nil, err
+	}
+	stagingRelative, err := stringInput(inputs, "dump_staging_relative_handle")
+	if err != nil || strings.Contains(stagingRelative, "/") || !fileNamePattern.MatchString(stagingRelative) {
+		return nil, errors.New("database-set dump staging relative handle is invalid")
+	}
+	dumpHandle, err := stringInput(inputs, "dump_artifact_handle")
+	if err != nil || dumpHandle != postgresDatabaseBundleHandle {
+		return nil, errors.New("database-set bundle handle is invalid")
+	}
+	dumpDigest, err := stringInput(inputs, "dump_artifact_digest")
+	if err != nil || !fileDigestPattern.MatchString(dumpDigest) {
+		return nil, errors.New("database-set bundle digest is invalid")
+	}
+	aclHandle, err := stringInput(inputs, "acl_artifact_handle")
+	if err != nil || aclHandle != postgresDatabaseBundleHandle {
+		return nil, errors.New("database-set ACL bundle handle is invalid")
+	}
+	aclDigest, err := stringInput(inputs, "acl_artifact_digest")
+	if err != nil || aclDigest != dumpDigest {
+		return nil, errors.New("database-set ACL bundle digest changed")
+	}
+	roleMapDigest, err := stringInput(inputs, "role_map_digest")
+	if err != nil || roleMapDigest != MustDigest(binding.RoleMap) {
+		return nil, errors.New("database-set role map digest changed")
+	}
+	expectedManifestDigest, err := stringInput(inputs, "expected_manifest_digest")
+	if err != nil || !fileDigestPattern.MatchString(expectedManifestDigest) {
+		return nil, errors.New("expected database-set manifest digest is invalid")
+	}
+	bundlePath, err := e.resolver.Resolve(stagingHandle, filepath.Join(stagingRelative, dumpHandle), false)
+	if err != nil {
+		return nil, err
+	}
+	bundle, err := readPostgresDatabaseBundle(bundlePath, dumpDigest, binding)
+	if err != nil {
+		return nil, err
+	}
+	if bundle.AggregateManifestDigest != expectedManifestDigest {
+		return nil, errors.New("database-set bundle manifest changed")
+	}
+	before, err := inspectPostgresDatabaseSet(ctx, e, bindingID, binding)
+	if err != nil {
+		return nil, err
+	}
+	for _, member := range before.Members {
+		if !member.Empty {
+			return nil, errors.New("every target database-set member must be empty before restore")
+		}
+	}
+	pgRestore, err := fixedPostgresExecutable("pg_restore")
+	if err != nil {
+		return nil, err
+	}
+	var totalSize int64
+	for _, member := range bundle.Members {
+		totalSize += member.DumpSizeBytes
+	}
+	var restoredSize int64
+	for index, scope := range postgresDatabaseScopes(binding) {
+		member := bundle.Members[index]
+		dumpPath, err := e.resolver.Resolve(stagingHandle, filepath.Join(stagingRelative, member.DumpArtifactHandle), false)
+		if err != nil {
+			return nil, err
+		}
+		actualDigest, size, err := fileSHA256(dumpPath)
+		if err != nil || actualDigest != member.DumpArtifactDigest || size != member.DumpSizeBytes {
+			return nil, errors.New("database-set archive digest verification failed")
+		}
+		aclPath, err := e.resolver.Resolve(stagingHandle, filepath.Join(stagingRelative, member.ACLArtifactHandle), false)
+		if err != nil {
+			return nil, err
+		}
+		aclArtifact, err := readPostgresACLArtifact(aclPath, member.ACLArtifactDigest, member.RoleMapDigest, binding.TargetRole)
+		if err != nil {
+			return nil, err
+		}
+		if _, err := e.runPostgres(ctx, scope, scope.Database, pgRestore, "--list", dumpPath); err != nil {
+			return nil, errors.New("database-set archive validation failed")
+		}
+		if err := progress("postgres_database_set_restore", restoredSize, &totalSize); err != nil {
+			return nil, err
+		}
+		if _, err := e.runPostgres(ctx, scope, scope.Database, pgRestore,
+			"--exit-on-error", "--single-transaction", "--no-owner", "--no-privileges", "--role="+scope.TargetRole, "--dbname="+scope.Database, dumpPath); err != nil {
+			return nil, err
+		}
+		if err := e.applyPostgresACL(ctx, scope, aclArtifact); err != nil {
+			return nil, err
+		}
+		after, err := e.inspectPostgres(ctx, bindingID, scope)
+		if err != nil || after.ManifestDigest != member.ManifestDigest {
+			return nil, errors.New("restored database-set member does not match its source manifest")
+		}
+		restoredSize += size
+	}
+	after, err := inspectPostgresDatabaseSet(ctx, e, bindingID, binding)
+	if err != nil || after.ManifestDigest != expectedManifestDigest {
+		return nil, errors.New("restored PostgreSQL database set does not match the source aggregate manifest")
+	}
+	if err := progress("postgres_database_set_restore_verified", restoredSize, &totalSize); err != nil {
+		return nil, err
+	}
+	return map[string]any{
+		"database_manifest_digest": after.ManifestDigest, "dump_artifact_digest": dumpDigest,
+		"acl_artifact_digest": aclDigest, "restored_size_bytes": restoredSize,
+		"database_count": len(after.Members), "total_rows": after.TotalRows,
+	}, nil
+}
+
 func (e *NativeExecutor) postgresVerify(ctx context.Context, task TaskEnvelope, inputs map[string]any) (map[string]any, error) {
 	bindingID, binding, err := e.resolvePostgresBinding(ctx, task, inputs)
 	if err != nil {
 		return nil, err
 	}
 	defer binding.clear()
+	if len(binding.Databases) > 1 {
+		if binding.Mode != "target" {
+			return nil, errors.New("PostgreSQL database-set verification requires a target binding")
+		}
+		expectedDigest, err := stringInput(inputs, "expected_manifest_digest")
+		if err != nil {
+			return nil, err
+		}
+		set, err := inspectPostgresDatabaseSet(ctx, e, bindingID, binding)
+		if err != nil {
+			return nil, err
+		}
+		if set.ManifestDigest != expectedDigest {
+			return nil, errors.New("PostgreSQL database-set verification manifest mismatch")
+		}
+		return map[string]any{
+			"verified": true, "database_manifest_digest": set.ManifestDigest,
+			"database_count": len(set.Members), "total_rows": set.TotalRows,
+		}, nil
+	}
 	if binding.Mode != "target" {
 		return nil, errors.New("PostgreSQL verification requires a target binding")
 	}

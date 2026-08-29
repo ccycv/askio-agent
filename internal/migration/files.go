@@ -943,6 +943,7 @@ func (e *NativeExecutor) filesSync(ctx context.Context, task TaskEnvelope, input
 	if allocatedCacheBytes > summary.TotalBytes {
 		allocatedCacheBytes = summary.TotalBytes
 	}
+	resumedFromCache := allocatedCacheBytes > 0
 	if err := e.ensureCapacity(e.stateDir, summary.TotalBytes-allocatedCacheBytes); err != nil {
 		return nil, err
 	}
@@ -958,7 +959,7 @@ func (e *NativeExecutor) filesSync(ctx context.Context, task TaskEnvelope, input
 	if err != nil || strings.Contains(targetRelative, "/") || !fileNamePattern.MatchString(targetRelative) {
 		return nil, errors.New("file sync target relative handle is invalid")
 	}
-	resumed, err := e.applyFileTree(ctx, task, targetHandle, targetRelative, downloadedRoot, summary)
+	idempotentReplay, err := e.applyFileTree(ctx, task, targetHandle, targetRelative, downloadedRoot, summary)
 	if err != nil {
 		return nil, err
 	}
@@ -967,7 +968,8 @@ func (e *NativeExecutor) filesSync(ctx context.Context, task TaskEnvelope, input
 	}
 	return map[string]any{
 		"manifest_digest": summary.Digest, "file_count": summary.FileCount, "directory_count": summary.DirectoryCount,
-		"total_bytes": summary.TotalBytes, "chunk_size_bytes": transferChunkSize, "resumed": resumed,
+		"total_bytes": summary.TotalBytes, "chunk_size_bytes": transferChunkSize, "resumed": resumedFromCache || idempotentReplay,
+		"resumed_from_cache": resumedFromCache, "idempotent_replay": idempotentReplay,
 		"target_relative_handle": targetRelative, "transport": "migration.direct.mtls-chunks.v1", "transfer_cache_removed": true,
 	}, nil
 }

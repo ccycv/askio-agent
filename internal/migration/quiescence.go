@@ -4,12 +4,152 @@ import (
 	"context"
 	"errors"
 	"math"
+	"strings"
 	"time"
 )
 
 type brokerVerificationResult struct {
 	response BrokerResponse
 	err      error
+}
+
+type sourceDatabaseObservation struct {
+	ManifestDigest string
+	DatabaseBytes  int64
+}
+
+type sourceDatabaseObserver struct {
+	engine                 string
+	inspect                func(context.Context) (sourceDatabaseObservation, error)
+	logicalSlotRetainedWAL func(context.Context) (int64, error)
+	logicalSlotWALCeiling  int64
+	close                  func()
+}
+
+func (e *NativeExecutor) newSourceDatabaseObserver(ctx context.Context, task TaskEnvelope, inputs map[string]any) (sourceDatabaseObserver, error) {
+	engine, err := stringInput(inputs, "database_engine")
+	if err != nil {
+		return sourceDatabaseObserver{}, err
+	}
+	switch engine {
+	case "postgresql":
+		bindingID, binding, err := e.resolvePostgresBinding(ctx, task, inputs)
+		if err != nil {
+			return sourceDatabaseObserver{}, err
+		}
+		if binding.Mode != "source" {
+			binding.clear()
+			return sourceDatabaseObserver{}, errors.New("source observation requires a source PostgreSQL binding")
+		}
+		observer := sourceDatabaseObserver{
+			engine: engine, close: binding.clear,
+			inspect: func(sampleContext context.Context) (sourceDatabaseObservation, error) {
+				inspection, inspectErr := e.inspectPostgres(sampleContext, bindingID, binding)
+				if inspectErr != nil {
+					return sourceDatabaseObservation{}, inspectErr
+				}
+				if !inspection.Exists || inspection.NonDefaultTablespaceCount > 0 {
+					return sourceDatabaseObservation{}, errors.New("source PostgreSQL database is missing or unsupported")
+				}
+				return sourceDatabaseObservation{ManifestDigest: inspection.ManifestDigest, DatabaseBytes: inspection.DatabaseBytes}, nil
+			},
+		}
+		if mode, _ := inputs["migration_mode"].(string); mode == "postgres-logical" {
+			contract, contractErr := postgresLogicalContractFromInputs(inputs, binding)
+			if contractErr != nil {
+				binding.clear()
+				return sourceDatabaseObserver{}, contractErr
+			}
+			slot, slotErr := stringInput(inputs, "logical_slot_name")
+			if slotErr != nil || !postgresIdentifierPattern.MatchString(slot) || !strings.HasPrefix(slot, "askio_slot_") {
+				binding.clear()
+				return sourceDatabaseObserver{}, errors.New("PostgreSQL logical estimate slot is invalid")
+			}
+			observer.logicalSlotWALCeiling = contract.MaximumSlotWALBytes
+			observer.logicalSlotRetainedWAL = func(sampleContext context.Context) (int64, error) {
+				rows, queryErr := e.queryPostgres(sampleContext, binding, binding.Database,
+					"select coalesce(pg_wal_lsn_diff(pg_current_wal_lsn(),restart_lsn),0)::bigint::text,active::text from pg_replication_slots where slot_name="+quotePostgresLiteral(slot))
+				if queryErr != nil || len(rows) != 1 || len(rows[0]) != 2 {
+					return 0, errors.New("PostgreSQL logical estimate slot is unavailable")
+				}
+				value, parseErr := parseSingleInt([][]string{{rows[0][0]}})
+				active, activeErr := postgresBool([][]string{{rows[0][1]}})
+				if parseErr != nil || activeErr != nil || value < 0 || !active {
+					return 0, errors.New("PostgreSQL logical estimate slot is missing or inactive")
+				}
+				return value, nil
+			}
+		}
+		return observer, nil
+	case "mysql", "mariadb":
+		bindingID, binding, err := e.resolveMySQLBinding(ctx, task, inputs)
+		if err != nil {
+			return sourceDatabaseObserver{}, err
+		}
+		if binding.Mode != "source" || binding.Engine != engine {
+			binding.clear()
+			return sourceDatabaseObserver{}, errors.New("source observation database engine does not match its binding")
+		}
+		return sourceDatabaseObserver{
+			engine: engine, close: binding.clear,
+			inspect: func(sampleContext context.Context) (sourceDatabaseObservation, error) {
+				inspection, inspectErr := e.inspectMySQL(sampleContext, bindingID, binding)
+				if inspectErr != nil {
+					return sourceDatabaseObservation{}, inspectErr
+				}
+				if !inspection.Exists {
+					return sourceDatabaseObservation{}, errors.New("source MySQL or MariaDB database is missing")
+				}
+				return sourceDatabaseObservation{ManifestDigest: inspection.ManifestDigest, DatabaseBytes: inspection.DatabaseBytes}, nil
+			},
+		}, nil
+	case "mongodb":
+		bindingID, binding, err := e.resolveMongoDBBinding(ctx, task, inputs)
+		if err != nil {
+			return sourceDatabaseObserver{}, err
+		}
+		if binding.Mode != "source" {
+			binding.clear()
+			return sourceDatabaseObserver{}, errors.New("source observation requires a source MongoDB binding")
+		}
+		return sourceDatabaseObserver{
+			engine: engine, close: binding.clear,
+			inspect: func(sampleContext context.Context) (sourceDatabaseObservation, error) {
+				inspection, inspectErr := e.inspectMongoDB(sampleContext, bindingID, binding)
+				if inspectErr != nil {
+					return sourceDatabaseObservation{}, inspectErr
+				}
+				if !inspection.Exists {
+					return sourceDatabaseObservation{}, errors.New("source MongoDB database has no supported collections")
+				}
+				return sourceDatabaseObservation{ManifestDigest: inspection.ManifestDigest, DatabaseBytes: inspection.DatabaseBytes}, nil
+			},
+		}, nil
+	case "redis", "valkey":
+		bindingID, binding, err := e.resolveRedisBinding(ctx, task, inputs)
+		if err != nil {
+			return sourceDatabaseObserver{}, err
+		}
+		if binding.Mode != "source" || binding.Engine != engine {
+			binding.clear()
+			return sourceDatabaseObserver{}, errors.New("source observation Redis or Valkey engine does not match its binding")
+		}
+		return sourceDatabaseObserver{
+			engine: engine, close: binding.clear,
+			inspect: func(sampleContext context.Context) (sourceDatabaseObservation, error) {
+				inspection, inspectErr := e.inspectRedis(sampleContext, bindingID, binding)
+				if inspectErr != nil {
+					return sourceDatabaseObservation{}, inspectErr
+				}
+				if !inspection.Exists {
+					return sourceDatabaseObservation{}, errors.New("source Redis or Valkey instance is unavailable")
+				}
+				return sourceDatabaseObservation{ManifestDigest: inspection.ManifestDigest, DatabaseBytes: inspection.DatabaseBytes}, nil
+			},
+		}, nil
+	default:
+		return sourceDatabaseObserver{}, errors.New("source observation database engine is unsupported")
+	}
 }
 
 func optionalDigestInput(inputs map[string]any, key string) (string, error) {
@@ -30,20 +170,14 @@ func (e *NativeExecutor) sourceEstimate(
 	inputs map[string]any,
 	progress func(string, int64, *int64) error,
 ) (map[string]any, error) {
-	bindingID, binding, err := e.resolvePostgresBinding(ctx, task, inputs)
+	observer, err := e.newSourceDatabaseObserver(ctx, task, inputs)
 	if err != nil {
 		return nil, err
 	}
-	defer binding.clear()
-	if binding.Mode != "source" {
-		return nil, errors.New("cutover estimation requires a source database binding")
-	}
-	inspection, err := e.inspectPostgres(ctx, bindingID, binding)
+	defer observer.close()
+	inspection, err := observer.inspect(ctx)
 	if err != nil {
 		return nil, err
-	}
-	if !inspection.Exists || inspection.NonDefaultTablespaceCount > 0 {
-		return nil, errors.New("source database is missing or uses unsupported tablespaces")
 	}
 	handle, err := stringInput(inputs, "root_handle")
 	if err != nil {
@@ -67,16 +201,45 @@ func (e *NativeExecutor) sourceEstimate(
 	if err != nil {
 		return nil, err
 	}
-	payloadBytes := inspection.DatabaseBytes + files.TotalBytes
+	databasePayloadBytes := inspection.DatabaseBytes
+	logicalSlotWALBytes := int64(0)
+	if observer.logicalSlotRetainedWAL != nil {
+		logicalSlotWALBytes, err = observer.logicalSlotRetainedWAL(ctx)
+		if err != nil {
+			return nil, err
+		}
+		databasePayloadBytes = logicalSlotWALBytes
+		if observer.logicalSlotWALCeiling < minimumPostgresLogicalWAL || logicalSlotWALBytes > observer.logicalSlotWALCeiling {
+			return nil, errors.New("PostgreSQL logical slot exceeded the approved WAL retention ceiling")
+		}
+		minimumHeadroom := int64(math.Ceil(float64(observer.logicalSlotWALCeiling) * 0.2))
+		if minimumHeadroom < 64*1024*1024 {
+			minimumHeadroom = 64 * 1024 * 1024
+		}
+		if observer.logicalSlotWALCeiling-logicalSlotWALBytes < minimumHeadroom {
+			return nil, errors.New("PostgreSQL logical slot is too near the approved WAL retention ceiling")
+		}
+	}
+	payloadBytes := databasePayloadBytes + files.TotalBytes
 	estimatedSeconds := int64(math.Ceil(float64(payloadBytes) / float64(throughputMiB*1024*1024)))
 	if estimatedSeconds < 1 && payloadBytes > 0 {
 		estimatedSeconds = 1
 	}
 	observedAt := time.Now().UTC().Format(time.RFC3339Nano)
 	proof := map[string]any{
-		"schema_version":             "operations.migration.cutover-estimate.v1",
-		"database_manifest_digest":   inspection.ManifestDigest,
-		"database_bytes":             inspection.DatabaseBytes,
+		"schema_version":                 "operations.migration.cutover-estimate.v1",
+		"database_engine":                observer.engine,
+		"database_manifest_digest":       inspection.ManifestDigest,
+		"database_bytes":                 inspection.DatabaseBytes,
+		"database_payload_bytes":         databasePayloadBytes,
+		"logical_slot_wal_bytes":         logicalSlotWALBytes,
+		"logical_slot_wal_ceiling_bytes": observer.logicalSlotWALCeiling,
+		"logical_slot_wal_remaining_bytes": func() int64 {
+			if observer.logicalSlotWALCeiling == 0 {
+				return 0
+			}
+			return observer.logicalSlotWALCeiling - logicalSlotWALBytes
+		}(),
 		"file_manifest_digest":       files.Digest,
 		"file_bytes":                 files.TotalBytes,
 		"file_count":                 files.FileCount,
@@ -111,14 +274,11 @@ func (e *NativeExecutor) sourceQuiescence(
 	if err != nil {
 		return nil, err
 	}
-	bindingID, binding, err := e.resolvePostgresBinding(ctx, task, inputs)
+	observer, err := e.newSourceDatabaseObserver(ctx, task, inputs)
 	if err != nil {
 		return nil, err
 	}
-	defer binding.clear()
-	if binding.Mode != "source" {
-		return nil, errors.New("quiescence verification requires a source database binding")
-	}
+	defer observer.close()
 	handle, err := stringInput(inputs, "root_handle")
 	if err != nil {
 		return nil, err
@@ -145,7 +305,7 @@ func (e *NativeExecutor) sourceQuiescence(
 		brokerResult <- brokerVerificationResult{response: response, err: executeErr}
 	}()
 
-	beforeDatabase, err := e.inspectPostgres(ctx, bindingID, binding)
+	beforeDatabase, err := observer.inspect(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -168,7 +328,7 @@ func (e *NativeExecutor) sourceQuiescence(
 	if err := progress("quiescence_second_sample", 0, nil); err != nil {
 		return nil, err
 	}
-	afterDatabase, err := e.inspectPostgres(ctx, bindingID, binding)
+	afterDatabase, err := observer.inspect(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -190,7 +350,8 @@ func (e *NativeExecutor) sourceQuiescence(
 	}
 	writerActive, _ := verification.response.Outputs["writer_fence_active"].(bool)
 	violations, violationErr := boundedIntegerInput(verification.response.Outputs, "violation_count", 0, math.MaxInt64)
-	if violationErr != nil || !writerActive || violations != 0 {
+	watchdogErrors, watchdogErr := boundedIntegerInput(verification.response.Outputs, "watchdog_error_count", 0, math.MaxInt64)
+	if violationErr != nil || watchdogErr != nil || !writerActive || violations != 0 || watchdogErrors != 0 {
 		return nil, errors.New("writer fence was violated during source quiescence")
 	}
 	if beforeDatabase.ManifestDigest != afterDatabase.ManifestDigest || beforeFiles.Digest != afterFiles.Digest {
@@ -204,18 +365,20 @@ func (e *NativeExecutor) sourceQuiescence(
 	}
 	observedAt := time.Now().UTC().Format(time.RFC3339Nano)
 	proof := map[string]any{
-		"schema_version":               "operations.migration.source-quiescence.v1",
-		"writer_fence_active":          true,
-		"writer_fence_verified_at":     verification.response.Outputs["verified_at"],
-		"writer_fence_activated_at":    verification.response.Outputs["activated_at"],
-		"writer_fence_fencing_token":   verification.response.Outputs["fence_fencing_token"],
-		"writer_fence_violation_count": violations,
-		"interval_seconds":             interval,
-		"database_manifest_digest":     afterDatabase.ManifestDigest,
-		"file_manifest_digest":         afterFiles.Digest,
-		"file_count":                   afterFiles.FileCount,
-		"file_bytes":                   afterFiles.TotalBytes,
-		"observed_at":                  observedAt,
+		"schema_version":                    "operations.migration.source-quiescence.v1",
+		"database_engine":                   observer.engine,
+		"writer_fence_active":               true,
+		"writer_fence_verified_at":          verification.response.Outputs["verified_at"],
+		"writer_fence_activated_at":         verification.response.Outputs["activated_at"],
+		"writer_fence_fencing_token":        verification.response.Outputs["fence_fencing_token"],
+		"writer_fence_violation_count":      violations,
+		"writer_fence_watchdog_error_count": watchdogErrors,
+		"interval_seconds":                  interval,
+		"database_manifest_digest":          afterDatabase.ManifestDigest,
+		"file_manifest_digest":              afterFiles.Digest,
+		"file_count":                        afterFiles.FileCount,
+		"file_bytes":                        afterFiles.TotalBytes,
+		"observed_at":                       observedAt,
 	}
 	proofDigest, err := Digest(proof)
 	if err != nil {

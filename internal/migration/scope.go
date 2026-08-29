@@ -14,6 +14,14 @@ type ScopeResolver struct {
 	roots map[string]string
 }
 
+func (s *ScopeResolver) Root(handle string) (string, error) {
+	root, ok := s.roots[handle]
+	if !ok {
+		return "", fmt.Errorf("%w: unknown root handle", errUnsafeScope)
+	}
+	return root, nil
+}
+
 func NewScopeResolver(roots map[string]string) (*ScopeResolver, error) {
 	if len(roots) == 0 {
 		return nil, errors.New("at least one migration root handle is required")

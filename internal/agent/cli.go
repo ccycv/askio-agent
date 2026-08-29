@@ -28,6 +28,104 @@ type CLIOptions struct {
 	Logger *slog.Logger
 }
 
+type atomicWriteStepHook func(string) error
+
+func atomicReplaceFile(path string, content []byte, mode os.FileMode, hook atomicWriteStepHook) error {
+	directoryPath := filepath.Dir(path)
+	directoryInfo, err := os.Lstat(directoryPath)
+	if err != nil || !directoryInfo.IsDir() || directoryInfo.Mode()&os.ModeSymlink != 0 || directoryInfo.Mode().Perm()&0o022 != 0 {
+		return fmt.Errorf("atomic file destination directory is unsafe: %s", directoryPath)
+	}
+	temporary, err := os.CreateTemp(directoryPath, ".askio-atomic-*")
+	if err != nil {
+		return err
+	}
+	temporaryPath := temporary.Name()
+	defer os.Remove(temporaryPath)
+	runHook := func(step string) error {
+		if hook != nil {
+			return hook(step)
+		}
+		return nil
+	}
+	if err := runHook("temporary-created"); err != nil {
+		temporary.Close()
+		return err
+	}
+	if _, err := temporary.Write(content); err != nil {
+		temporary.Close()
+		return err
+	}
+	if err := runHook("content-written"); err != nil {
+		temporary.Close()
+		return err
+	}
+	if err := temporary.Chmod(mode); err != nil {
+		temporary.Close()
+		return err
+	}
+	if err := temporary.Chown(0, 0); err != nil {
+		temporary.Close()
+		return err
+	}
+	if err := runHook("ownership-applied"); err != nil {
+		temporary.Close()
+		return err
+	}
+	if err := temporary.Sync(); err != nil {
+		temporary.Close()
+		return err
+	}
+	if err := runHook("file-synced"); err != nil {
+		temporary.Close()
+		return err
+	}
+	if err := temporary.Close(); err != nil {
+		return err
+	}
+	if err := runHook("file-closed"); err != nil {
+		return err
+	}
+	if err := os.Rename(temporaryPath, path); err != nil {
+		return err
+	}
+	if err := runHook("file-renamed"); err != nil {
+		return err
+	}
+	directory, err := os.Open(directoryPath)
+	if err != nil {
+		return err
+	}
+	if err := directory.Sync(); err != nil {
+		directory.Close()
+		return err
+	}
+	if err := directory.Close(); err != nil {
+		return err
+	}
+	return runHook("directory-synced")
+}
+
+func writeMigrationFenceDropIn(unitRoot, markerRoot, service string, hook atomicWriteStepHook) error {
+	directory := filepath.Join(unitRoot, service+".d")
+	if err := os.MkdirAll(directory, 0o755); err != nil {
+		return err
+	}
+	marker := filepath.Join(markerRoot, service+".fenced")
+	content := []byte("[Unit]\nRequires=askio-migration-broker.service\nAfter=askio-migration-broker.service\nConditionPathExists=!" + marker + "\n")
+	target := filepath.Join(directory, "90-askio-migration-fence.conf")
+	if _, err := os.Lstat(marker); err == nil {
+		existing, readErr := os.ReadFile(target)
+		if readErr != nil || string(existing) != string(content) {
+			return fmt.Errorf("refusing to replace a missing or changed inhibitor for actively fenced service %s", service)
+		}
+		return nil
+	} else if !os.IsNotExist(err) {
+		return err
+	}
+	return atomicReplaceFile(target, content, 0o644, hook)
+}
+
 func NewCLI(opts CLIOptions) *cobra.Command {
 	var cfgPath string
 
@@ -45,10 +143,34 @@ func NewCLI(opts CLIOptions) *cobra.Command {
 	root.AddCommand(newRemediateCmd(opts.Logger, &cfgPath))
 	root.AddCommand(newStatusCmd(opts.Logger, &cfgPath))
 	root.AddCommand(newInstallCmd(opts.Logger, &cfgPath))
+	root.AddCommand(newMigrationEnrollmentChallengeCmd())
 	root.AddCommand(newMigrationEnrollmentCmd())
 	root.AddCommand(newMigrationBrokerCmd(&cfgPath))
 
 	return root
+}
+
+func newMigrationEnrollmentChallengeCmd() *cobra.Command {
+	var keyDir string
+	cmd := &cobra.Command{
+		Use:    "migration-enrollment-challenge",
+		Short:  "Prepare the host-bound migration enrollment challenge",
+		Hidden: true,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			identity, err := migration.LoadOrCreateIdentity(keyDir)
+			if err != nil {
+				return err
+			}
+			digest, err := migration.EnrollmentChallengeDigest(identity)
+			if err != nil {
+				return err
+			}
+			_, err = fmt.Fprintln(os.Stdout, digest)
+			return err
+		},
+	}
+	cmd.Flags().StringVar(&keyDir, "key-dir", "/var/lib/askio-monitor/migration/keys", "Root for agent-owned migration keys")
+	return cmd
 }
 
 var digestPattern = regexp.MustCompile(`^sha256:[a-f0-9]{64}$`)
@@ -60,8 +182,16 @@ func migrationCapabilities() []string {
 		"migration.checkpoint_resume.v1", "migration.validation.v1", "migration.evidence.v1",
 		"migration.cleanup.v1", "migration.maintenance.v1",
 		"migration.files_sync.v1", "migration.direct_mtls_chunks.v1",
-		"migration.postgres_offline.v1", "migration.compose_isolation.v1", "migration.quiescence.v1",
+		"migration.postgres_offline.v1", "migration.postgres_logical.v1", "migration.mysql_offline.v1", "migration.mongodb_offline.v1", "migration.redis_offline.v1",
+		"migration.compose_isolation.v1", "migration.quiescence.v1",
 	}
+}
+
+func installHeartbeatIntervalSeconds(migrationEnabled bool) int {
+	if migrationEnabled {
+		return 10
+	}
+	return 30
 }
 
 func newMigrationEnrollmentCmd() *cobra.Command {
@@ -370,6 +500,7 @@ func newInstallCmd(logger *slog.Logger, cfgPath *string) *cobra.Command {
 			if migrationEnabled && (agentMode != "host" || priv == config.PrivilegeModeRoot || unitUser == "root") {
 				return fmt.Errorf("migration requires host mode, sudo privilege mode, and a non-root service user")
 			}
+			heartbeatIntervalSeconds := installHeartbeatIntervalSeconds(migrationEnabled)
 			cfg := config.Config{
 				Mode:                      agentMode,
 				APIURL:                    apiURL,
@@ -377,7 +508,7 @@ func newInstallCmd(logger *slog.Logger, cfgPath *string) *cobra.Command {
 				AgentID:                   agentID,
 				AgentToken:                token,
 				PrivilegeMode:             priv,
-				HeartbeatIntervalSeconds:  30,
+				HeartbeatIntervalSeconds:  heartbeatIntervalSeconds,
 				ConfigPollIntervalSeconds: 60,
 				LogLevel:                  "info",
 				DataDir:                   config.DefaultDataDir(),
@@ -520,6 +651,16 @@ func newInstallCmd(logger *slog.Logger, cfgPath *string) *cobra.Command {
 				if err := os.WriteFile(brokerUnitPath, []byte(migrationBrokerUnitTemplate(*cfgPath, n.Migration)), 0o644); err != nil {
 					return err
 				}
+				for _, service := range n.Migration.AllowedServices {
+					if err := writeMigrationFenceDropIn(
+						"/etc/systemd/system",
+						"/var/lib/askio-migration-broker/service-fences",
+						service,
+						nil,
+					); err != nil {
+						return err
+					}
+				}
 			}
 
 			// Enable/start.
@@ -615,7 +756,7 @@ RestrictSUIDSGID=true
 LockPersonality=true
 RuntimeDirectory=askio-monitor
 RuntimeDirectoryMode=0700
-RuntimeDirectoryPreserve=yes
+RuntimeDirectoryPreserve=no
 ReadWritePaths=%s
 
 [Install]
@@ -629,13 +770,17 @@ func migrationBrokerUnitTemplate(cfgPath string, migrationConfig *config.Migrati
 		paths = append(paths, root)
 	}
 	sort.Strings(paths)
+	beforeUnits := append([]string{"askio-monitor.service"}, migrationConfig.AllowedServices...)
+	sort.Strings(beforeUnits)
 	return fmt.Sprintf(`[Unit]
 Description=Askio Typed Migration Privilege Broker
 After=local-fs.target
-Before=askio-monitor.service
+Before=%s
 
 [Service]
-Type=simple
+Type=notify
+NotifyAccess=main
+TimeoutStartSec=90
 User=root
 Group=root
 ExecStart=/usr/local/bin/askio-monitor migration-broker --config %s
@@ -652,5 +797,5 @@ ReadWritePaths=%s
 
 [Install]
 WantedBy=multi-user.target
-`, cfgPath, strings.Join(paths, " "))
+`, strings.Join(beforeUnits, " "), cfgPath, strings.Join(paths, " "))
 }

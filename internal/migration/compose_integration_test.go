@@ -89,6 +89,9 @@ func TestComposeRuntimeSecretLifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if err := cleanup(); err != nil {
+		t.Fatal(err)
+	}
 	started = true
 	if outputs["started"] != true || outputs["isolated"] != true {
 		t.Fatalf("Compose start did not return bounded success outputs: %#v", outputs)
@@ -106,8 +109,12 @@ func TestComposeRuntimeSecretLifecycle(t *testing.T) {
 	if err != nil || exitCode != 0 || inside != secret {
 		t.Fatal("the declared non-root container could not read its file-backed runtime secret")
 	}
-	if data, err := os.ReadFile(secretPath); err != nil || string(data) != secret {
-		t.Fatal("the memory-backed runtime secret did not remain available while the target was running")
+	if _, err := os.Lstat(secretPath); !os.IsNotExist(err) {
+		t.Fatalf("the agent-owned runtime secret was not removed after the broker returned: %v", err)
+	}
+	snapshotSecretPath := filepath.Join(broker.composeSnapshotRoot(), project, "secret-runtime_credential")
+	if data, err := os.ReadFile(snapshotSecretPath); err != nil || string(data) != secret {
+		t.Fatal("the broker-owned runtime secret snapshot was unavailable while the target was running")
 	}
 
 	stopTask := task
@@ -129,6 +136,9 @@ func TestComposeRuntimeSecretLifecycle(t *testing.T) {
 	if _, err := os.Lstat(filepath.Join(composeRuntimeSecretsRoot, project)); !os.IsNotExist(err) {
 		t.Fatalf("runtime secret project directory remains after typed stop: %v", err)
 	}
+	if _, err := os.Lstat(filepath.Join(broker.composeSnapshotRoot(), project)); !os.IsNotExist(err) {
+		t.Fatalf("broker-owned Compose snapshot remains after typed stop: %v", err)
+	}
 	containers, exitCode, err = runFixedCapture(ctx, docker, "ps", "-aq", "--filter", "label=com.docker.compose.project="+project)
 	if err != nil || exitCode != 0 || strings.TrimSpace(containers) != "" {
 		t.Fatal("typed stop left residual Compose containers")
@@ -145,8 +155,6 @@ func composeIntegrationDocument(image, project string) map[string]any {
     restart: "no"
     environment:
       REDIS_PASSWORD_FILE: /run/secrets/runtime_credential
-    volumes:
-      - ./data:/fixture-data:rw
     networks:
       isolated:
         ipv4_address: 172.29.253.2

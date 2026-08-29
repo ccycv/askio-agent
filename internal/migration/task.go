@@ -26,6 +26,7 @@ import (
 
 const (
 	RouteTaskClaim        = "monitor-agent-migration-task-claim"
+	RouteHeartbeat        = "monitor-agent-heartbeat"
 	RouteTaskProgress     = "monitor-agent-migration-task-progress"
 	RouteTaskResult       = "monitor-agent-migration-task-result"
 	RouteTaskCancelStatus = "monitor-agent-migration-task-cancel-status"
@@ -102,6 +103,10 @@ type ticketAwareExecutor interface {
 	SetTicketResolver(TicketResolver)
 }
 
+type writerFenceAttestationExecutor interface {
+	WriterFenceAttestations(context.Context) ([]WriterFenceAttestation, error)
+}
+
 type sealedSecretEnvelope struct {
 	SchemaVersion      string `json:"schema_version"`
 	BindingID          string `json:"binding_id"`
@@ -124,28 +129,30 @@ type sealedSecretResponse struct {
 }
 
 type persistentState struct {
-	SchemaVersion     string         `json:"schema_version"`
-	AcceptedDigest    string         `json:"accepted_envelope_digest,omitempty"`
-	ActiveAttemptID   string         `json:"active_attempt_id,omitempty"`
-	ActivePrimitive   string         `json:"active_primitive,omitempty"`
-	CurrentPhase      string         `json:"current_phase,omitempty"`
-	ProgressSequence  int64          `json:"progress_sequence,omitempty"`
-	PendingRoute      string         `json:"pending_route,omitempty"`
-	PendingResultBody map[string]any `json:"pending_result_body,omitempty"`
-	SeenNonces        []string       `json:"seen_nonces,omitempty"`
+	SchemaVersion     string            `json:"schema_version"`
+	AcceptedDigest    string            `json:"accepted_envelope_digest,omitempty"`
+	ActiveAttemptID   string            `json:"active_attempt_id,omitempty"`
+	ActivePrimitive   string            `json:"active_primitive,omitempty"`
+	CurrentPhase      string            `json:"current_phase,omitempty"`
+	ProgressSequence  int64             `json:"progress_sequence,omitempty"`
+	PendingRoute      string            `json:"pending_route,omitempty"`
+	PendingResultBody map[string]any    `json:"pending_result_body,omitempty"`
+	SeenNonces        []string          `json:"seen_nonces,omitempty"`
+	SeenNonceExpiries map[string]string `json:"seen_nonce_expiries,omitempty"`
 }
 
 type Runner struct {
-	client        *api.Client
-	agentID       string
-	identity      *Identity
-	backendKeyID  string
-	backendPublic ed25519.PublicKey
-	statePath     string
-	executor      Executor
-	activityHook  func(bool)
-	mu            sync.Mutex
-	state         persistentState
+	client                 *api.Client
+	agentID                string
+	identity               *Identity
+	backendKeyID           string
+	backendPublic          ed25519.PublicKey
+	statePath              string
+	executor               Executor
+	activityHook           func(bool)
+	leaseHeartbeatInterval time.Duration
+	mu                     sync.Mutex
+	state                  persistentState
 }
 
 var errTaskPauseRequested = errors.New("migration task pause requested")
@@ -155,6 +162,14 @@ func (r *Runner) SetActivityHook(hook func(bool)) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.activityHook = hook
+}
+
+func (r *Runner) WriterFenceAttestations(ctx context.Context) ([]WriterFenceAttestation, error) {
+	attestor, ok := r.executor.(writerFenceAttestationExecutor)
+	if !ok {
+		return nil, errors.New("writer-fence attestation is unavailable")
+	}
+	return attestor.WriterFenceAttestations(ctx)
 }
 
 func parseBackendSigningKey(encoded string) (ed25519.PublicKey, error) {
@@ -194,7 +209,11 @@ func NewRunner(client *api.Client, agentID string, identity *Identity, backendKe
 	runner := &Runner{
 		client: client, agentID: agentID, identity: identity, backendKeyID: backendKeyID,
 		backendPublic: backendPublic, statePath: filepath.Join(stateDir, "task-state.json"), executor: executor,
-		state: persistentState{SchemaVersion: "operations.migration.agent-state.v1", SeenNonces: []string{}},
+		leaseHeartbeatInterval: 20 * time.Second,
+		state: persistentState{
+			SchemaVersion: "operations.migration.agent-state.v1",
+			SeenNonces:    []string{}, SeenNonceExpiries: map[string]string{},
+		},
 	}
 	if aware, ok := executor.(bindingAwareExecutor); ok {
 		aware.SetBindingResolver(runner.resolveBinding)
@@ -284,25 +303,54 @@ func expectedBindingPurpose(task TaskEnvelope, bindingID string) string {
 	if value, _ := inputs["runtime_secret_binding_id"].(string); value == bindingID && task.Primitive.ID == "migration.compose.start-isolated.v1" && endpointRole == "target" {
 		return "compose.runtime-secrets"
 	}
+	if value, _ := inputs["logical_source_binding_id"].(string); value == bindingID && endpointRole == "target" &&
+		strings.HasPrefix(task.Primitive.ID, "migration.postgres.logical-") {
+		return "postgres.logical-source"
+	}
 	if value, _ := inputs["database_binding_id"].(string); value != bindingID {
 		return ""
 	}
-	switch task.Primitive.ID {
-	case "migration.postgres.dump.v1", "migration.source.estimate.v1", "migration.source.verify-quiescence.v1":
-		if endpointRole == "source" {
-			return "postgres.source"
+	family := ""
+	switch {
+	case strings.HasPrefix(task.Primitive.ID, "migration.postgres."):
+		family = "postgres"
+	case strings.HasPrefix(task.Primitive.ID, "migration.mysql."):
+		family = "mysql"
+	case strings.HasPrefix(task.Primitive.ID, "migration.mongodb."):
+		family = "mongodb"
+	case strings.HasPrefix(task.Primitive.ID, "migration.redis."):
+		family = "redis"
+	case task.Primitive.ID == "migration.source.estimate.v1" || task.Primitive.ID == "migration.source.verify-quiescence.v1":
+		engine, _ := inputs["database_engine"].(string)
+		switch engine {
+		case "postgresql":
+			family = "postgres"
+		case "mysql", "mariadb":
+			family = "mysql"
+		case "mongodb":
+			family = "mongodb"
+		case "redis", "valkey":
+			family = "redis"
 		}
-	case "migration.postgres.reset-empty-target.v1", "migration.postgres.restore.v1", "migration.postgres.verify.v1":
-		if endpointRole == "target" {
-			return "postgres.target"
-		}
-	case "migration.postgres.inspect.v1":
-		if endpointRole == "source" {
-			return "postgres.source"
-		}
-		if endpointRole == "target" {
-			return "postgres.target"
-		}
+	}
+	if family == "" {
+		return ""
+	}
+	sourcePrimitive := strings.HasSuffix(task.Primitive.ID, ".inspect.v1") || strings.HasSuffix(task.Primitive.ID, ".dump.v1") ||
+		task.Primitive.ID == "migration.source.estimate.v1" || task.Primitive.ID == "migration.source.verify-quiescence.v1" ||
+		task.Primitive.ID == "migration.postgres.logical-preflight.v1" || task.Primitive.ID == "migration.postgres.logical-schema-dump.v1" ||
+		task.Primitive.ID == "migration.postgres.logical-prepare-source.v1" || task.Primitive.ID == "migration.postgres.logical-finalize-source.v1" ||
+		task.Primitive.ID == "migration.postgres.logical-cleanup-source.v1"
+	targetPrimitive := strings.HasSuffix(task.Primitive.ID, ".inspect.v1") || strings.HasSuffix(task.Primitive.ID, ".reset-empty-target.v1") ||
+		strings.HasSuffix(task.Primitive.ID, ".restore.v1") || strings.HasSuffix(task.Primitive.ID, ".verify.v1") ||
+		task.Primitive.ID == "migration.postgres.logical-preflight.v1" || task.Primitive.ID == "migration.postgres.logical-restore-schema.v1" ||
+		task.Primitive.ID == "migration.postgres.logical-start-subscription.v1" || task.Primitive.ID == "migration.postgres.logical-finalize-target.v1" ||
+		task.Primitive.ID == "migration.postgres.logical-cleanup-target.v1"
+	if endpointRole == "source" && sourcePrimitive {
+		return family + ".source"
+	}
+	if endpointRole == "target" && targetPrimitive {
+		return family + ".target"
 	}
 	return ""
 }
@@ -407,6 +455,9 @@ func (r *Runner) loadState() error {
 	if r.state.SchemaVersion != "operations.migration.agent-state.v1" {
 		return errors.New("unsupported migration task state schema")
 	}
+	if r.state.SeenNonceExpiries == nil {
+		r.state.SeenNonceExpiries = map[string]string{}
+	}
 	return nil
 }
 
@@ -466,6 +517,10 @@ func (r *Runner) signedBody(route string, fields map[string]any) (map[string]any
 	}
 	body["request_signature"] = base64.RawURLEncoding.EncodeToString(ed25519.Sign(r.identity.SigningPrivateKey, canonical))
 	return body, nil
+}
+
+func (r *Runner) SignRequestBody(route string, fields map[string]any) (map[string]any, error) {
+	return r.signedBody(route, fields)
 }
 
 func envelopeUnsigned(task TaskEnvelope) map[string]any {
@@ -529,6 +584,16 @@ func (r *Runner) verifyEnvelope(task TaskEnvelope) (string, error) {
 		if seen == task.Nonce {
 			return "", errors.New("task envelope nonce was already accepted")
 		}
+	}
+	now := time.Now().UTC()
+	for nonce, expiry := range r.state.SeenNonceExpiries {
+		expiresAt, parseErr := time.Parse(time.RFC3339Nano, expiry)
+		if parseErr == nil && expiresAt.Before(now) {
+			delete(r.state.SeenNonceExpiries, nonce)
+		}
+	}
+	if _, seen := r.state.SeenNonceExpiries[task.Nonce]; seen {
+		return "", errors.New("task envelope nonce was already accepted")
 	}
 	return digest, nil
 }
@@ -649,10 +714,10 @@ func (r *Runner) RunOnce(ctx context.Context) (bool, error) {
 	r.state.ActivePrimitive = task.Primitive.ID
 	r.state.CurrentPhase = "accepted"
 	r.state.ProgressSequence = 0
-	r.state.SeenNonces = append(r.state.SeenNonces, task.Nonce)
-	if len(r.state.SeenNonces) > 256 {
-		r.state.SeenNonces = append([]string{}, r.state.SeenNonces[len(r.state.SeenNonces)-256:]...)
+	if r.state.SeenNonceExpiries == nil {
+		r.state.SeenNonceExpiries = map[string]string{}
 	}
+	r.state.SeenNonceExpiries[task.Nonce] = task.ExpiresAt
 	if err := r.saveState(); err != nil {
 		return true, err
 	}
@@ -660,17 +725,85 @@ func (r *Runner) RunOnce(ctx context.Context) (bool, error) {
 		r.activityHook(true)
 		defer r.activityHook(false)
 	}
-	if err := r.progressCallback(ctx, task, "starting", 0, nil); err != nil {
+	executionContext, cancelExecution := context.WithCancel(ctx)
+	defer cancelExecution()
+	var progressMu sync.Mutex
+	lastPhase := "starting"
+	lastCompleted := int64(0)
+	var lastTotal *int64
+	var progressErr error
+	cloneTotal := func(value *int64) *int64 {
+		if value == nil {
+			return nil
+		}
+		copy := *value
+		return &copy
+	}
+	reportProgress := func(phase string, completed int64, total *int64) error {
+		progressMu.Lock()
+		defer progressMu.Unlock()
+		if progressErr != nil {
+			return progressErr
+		}
+		lastPhase = phase
+		lastCompleted = completed
+		lastTotal = cloneTotal(total)
+		if err := r.progressCallback(ctx, task, phase, completed, total); err != nil {
+			progressErr = err
+			cancelExecution()
+			return err
+		}
+		return nil
+	}
+	if err := reportProgress("starting", 0, nil); err != nil {
 		if errors.Is(err, errTaskPauseRequested) || errors.Is(err, errTaskCancelRequested) {
 			return true, r.persistAndPostResult(ctx, task, controlledResult(err, "starting", envelopeDigest))
 		}
 		return true, err
 	}
-	result := normalizeResult(r.executor.Execute(ctx, task, func(phase string, completed int64, total *int64) error {
-		return r.progressCallback(ctx, task, phase, completed, total)
-	}))
+	heartbeatDone := make(chan struct{})
+	heartbeatStopped := make(chan struct{})
+	go func() {
+		defer close(heartbeatStopped)
+		ticker := time.NewTicker(r.leaseHeartbeatInterval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-heartbeatDone:
+				return
+			case <-ticker.C:
+				progressMu.Lock()
+				if progressErr == nil {
+					if err := r.progressCallback(ctx, task, lastPhase, lastCompleted, cloneTotal(lastTotal)); err != nil {
+						progressErr = err
+						cancelExecution()
+					}
+				}
+				progressMu.Unlock()
+			}
+		}
+	}()
+	result := normalizeResult(r.executor.Execute(executionContext, task, reportProgress))
+	close(heartbeatDone)
+	<-heartbeatStopped
+	progressMu.Lock()
+	heartbeatErr := progressErr
+	progressMu.Unlock()
+	if heartbeatErr != nil {
+		if errors.Is(heartbeatErr, errTaskPauseRequested) || errors.Is(heartbeatErr, errTaskCancelRequested) {
+			result = controlledResult(heartbeatErr, lastPhase, envelopeDigest)
+		} else {
+			result = PrimitiveResult{
+				State: "paused_at_checkpoint", Outputs: map[string]any{}, EvidenceDigests: []string{},
+				Checkpoint: map[string]any{"phase": lastPhase, "envelope_digest": envelopeDigest, "reason": "lease_heartbeat_lost"},
+			}
+		}
+	}
 	completed := int64(1)
-	controlErr := r.progressCallback(ctx, task, "finalizing_result", completed, &completed)
+	controlErr := error(nil)
+	if heartbeatErr == nil {
+		controlErr = reportProgress("finalizing_result", completed, &completed)
+	}
 	if errors.Is(controlErr, errTaskPauseRequested) || errors.Is(controlErr, errTaskCancelRequested) {
 		result = controlledResult(controlErr, "finalizing_result", envelopeDigest)
 	}

@@ -177,3 +177,59 @@ func TestComposeRuntimeBindingPurposeIsLimitedToTargetStart(t *testing.T) {
 		t.Fatalf("Compose stop unexpectedly received runtime secret purpose %q", purpose)
 	}
 }
+
+func TestDatabaseBindingPurposesFollowTypedEngineAndEndpoint(t *testing.T) {
+	bindingID := "55555555-5555-4555-8555-555555555555"
+	for _, test := range []struct {
+		primitive string
+		engine    string
+		role      string
+		want      string
+	}{
+		{"migration.mysql.dump.v1", "", "source", "mysql.source"},
+		{"migration.mysql.restore.v1", "", "target", "mysql.target"},
+		{"migration.mongodb.inspect.v1", "", "source", "mongodb.source"},
+		{"migration.mongodb.verify.v1", "", "target", "mongodb.target"},
+		{"migration.source.estimate.v1", "mariadb", "source", "mysql.source"},
+		{"migration.source.verify-quiescence.v1", "mongodb", "source", "mongodb.source"},
+	} {
+		inputs := map[string]any{"database_binding_id": bindingID}
+		if test.engine != "" {
+			inputs["database_engine"] = test.engine
+		}
+		task := TaskEnvelope{
+			Primitive: PrimitiveRef{ID: test.primitive, Version: "1.0.0"},
+			Inputs:    map[string]any{"endpoint_role": test.role, "inputs": inputs},
+		}
+		if got := expectedBindingPurpose(task, bindingID); got != test.want {
+			t.Fatalf("%s %s purpose = %q, want %q", test.primitive, test.role, got, test.want)
+		}
+	}
+}
+
+func TestPostgresLogicalSourceBindingPurposeIsTargetScoped(t *testing.T) {
+	databaseBindingID := "66666666-6666-4666-8666-666666666666"
+	logicalBindingID := "77777777-7777-4777-8777-777777777777"
+	for _, primitive := range []string{
+		"migration.postgres.logical-preflight.v1",
+		"migration.postgres.logical-start-subscription.v1",
+		"migration.postgres.logical-finalize-target.v1",
+	} {
+		task := TaskEnvelope{
+			Primitive: PrimitiveRef{ID: primitive, Version: "1.0.0"},
+			Inputs: map[string]any{"endpoint_role": "target", "inputs": map[string]any{
+				"database_binding_id": databaseBindingID, "logical_source_binding_id": logicalBindingID,
+			}},
+		}
+		if got := expectedBindingPurpose(task, logicalBindingID); got != "postgres.logical-source" {
+			t.Fatalf("%s logical purpose = %q", primitive, got)
+		}
+		if got := expectedBindingPurpose(task, databaseBindingID); got != "postgres.target" {
+			t.Fatalf("%s database purpose = %q", primitive, got)
+		}
+		task.Inputs["endpoint_role"] = "source"
+		if got := expectedBindingPurpose(task, logicalBindingID); got != "" {
+			t.Fatalf("source endpoint unexpectedly received logical source secret purpose %q", got)
+		}
+	}
+}

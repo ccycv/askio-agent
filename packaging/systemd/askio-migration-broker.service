@@ -4,7 +4,9 @@ After=local-fs.target
 Before=askio-monitor.service
 
 [Service]
-Type=simple
+Type=notify
+NotifyAccess=main
+TimeoutStartSec=90
 User=root
 Group=root
 ExecStart=/usr/local/bin/askio-monitor migration-broker --config /etc/askio/monitor.conf

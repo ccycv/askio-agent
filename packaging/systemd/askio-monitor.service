@@ -22,7 +22,7 @@ RestrictSUIDSGID=true
 LockPersonality=true
 RuntimeDirectory=askio-monitor
 RuntimeDirectoryMode=0700
-RuntimeDirectoryPreserve=yes
+RuntimeDirectoryPreserve=no
 ReadWritePaths=/run/askio-monitor /var/lib/askio-monitor /srv/askio-migrations /var/lib/askio-migrations
 
 [Install]

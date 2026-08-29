@@ -384,6 +384,9 @@ func TestFileSyncResumesAfterInterruptionAndRepairsCorruptCachedChunk(t *testing
 	if outputs["manifest_digest"] != summary.Digest {
 		t.Fatalf("resumed transfer did not verify the source manifest: %+v", outputs)
 	}
+	if outputs["resumed"] != true || outputs["resumed_from_cache"] != true || outputs["idempotent_replay"] != false {
+		t.Fatalf("partial transfer did not report an authenticated cache resume: %+v", outputs)
+	}
 	if _, err := os.Lstat(executor.transferCachePath(task, summary.Digest)); !os.IsNotExist(err) {
 		t.Fatalf("resumed transfer cache was not removed: %v", err)
 	}

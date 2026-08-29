@@ -8,6 +8,7 @@ import (
 	"errors"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"sort"
 	"strconv"
@@ -34,13 +35,30 @@ type Observation struct {
 	Redactions    map[string]any    `json:"redactions"`
 }
 
+func migrationCommandEnvironment() []string {
+	// The agent and broker retain MemoryDenyWriteExecute. Mongosh is a bundled
+	// Node/V8 executable, so force its non-JIT mode instead of weakening either
+	// service sandbox. Non-Node database tools ignore NODE_OPTIONS.
+	return []string{
+		"PATH=/usr/sbin:/usr/bin:/sbin:/bin",
+		"LANG=C",
+		"LC_ALL=C",
+		"HOME=/nonexistent",
+		"NODE_OPTIONS=--jitless",
+	}
+}
+
 func safeCommandVersion(ctx context.Context, paths []string, args ...string) (string, bool) {
 	for _, path := range paths {
 		if info, err := os.Stat(path); err != nil || !info.Mode().IsRegular() || info.Mode()&0o111 == 0 {
 			continue
 		}
 		command := exec.CommandContext(ctx, path, args...)
-		command.Env = []string{"PATH=/usr/sbin:/usr/bin:/sbin:/bin", "LANG=C", "LC_ALL=C", "HOME=/nonexistent"}
+		// Version probes must not inherit the service manager's working directory.
+		// Node-based clients such as mongosh resolve their startup directory before
+		// printing a version and fail when the agent was launched from /root.
+		command.Dir = "/"
+		command.Env = migrationCommandEnvironment()
 		output, err := command.CombinedOutput()
 		if err != nil {
 			return "", false
@@ -146,9 +164,68 @@ func listSystemdServices(ctx context.Context) []string {
 	return services
 }
 
+func selectedDatabaseClientFact(ctx context.Context, engine string) (ObservationFact, error) {
+	if engine == "redis" || engine == "valkey" {
+		return ObservationFact{
+			Key: "database." + engine, Kind: "database",
+			Value:      map[string]any{"engine": engine, "client_available": true, "client": "embedded-resp2"},
+			Provenance: []string{"declared:embedded-redis-client"}, Confidence: 1,
+		}, nil
+	}
+	if engine == "mongodb" {
+		value := map[string]any{"engine": engine, "client_available": true}
+		provenanceValues := []string{}
+		for _, name := range []string{"mongodump", "mongorestore", "mongosh"} {
+			version, ok := safeCommandVersion(ctx, []string{filepath.Join("/usr/bin", name), filepath.Join("/usr/local/bin", name)}, "--version")
+			if !ok {
+				value["client_available"] = false
+				provenanceValues = []string{"observed:fixed-binary-probe"}
+				break
+			}
+			value[name+"_version"] = version
+			provenanceValues = append(provenanceValues, "observed:"+name+"-version")
+		}
+		return ObservationFact{
+			Key: "database.mongodb", Kind: "database", Value: value,
+			Provenance: provenanceValues, Confidence: 1,
+		}, nil
+	}
+	var paths []string
+	var arguments []string
+	var provenance string
+	switch engine {
+	case "postgresql":
+		paths = []string{"/usr/bin/psql", "/usr/local/bin/psql"}
+		arguments = []string{"--version"}
+		provenance = "observed:psql-version"
+	case "mysql":
+		paths = []string{"/usr/bin/mysql", "/usr/local/bin/mysql"}
+		arguments = []string{"--version"}
+		provenance = "observed:mysql-client-version"
+	case "mariadb":
+		paths = []string{"/usr/bin/mariadb", "/usr/local/bin/mariadb"}
+		arguments = []string{"--version"}
+		provenance = "observed:mariadb-client-version"
+	default:
+		return ObservationFact{}, errors.New("discovery database engine is unsupported")
+	}
+	value := map[string]any{"engine": engine, "client_available": false}
+	provenanceValues := []string{"observed:fixed-binary-probe"}
+	if version, ok := safeCommandVersion(ctx, paths, arguments...); ok {
+		value["version"] = version
+		value["client_available"] = true
+		provenanceValues = []string{provenance}
+	}
+	return ObservationFact{
+		Key: "database." + engine, Kind: "database", Value: value,
+		Provenance: provenanceValues, Confidence: 1,
+	}, nil
+}
+
 func CollectObservation(ctx context.Context, task TaskEnvelope, rootHandles map[string]string) (Observation, error) {
 	role, _ := task.Inputs["endpoint_role"].(string)
 	manifestDigest, _ := task.Inputs["collector_manifest_digest"].(string)
+	databaseEngine, _ := task.Inputs["database_engine"].(string)
 	if (role != "source" && role != "target") || !strings.HasPrefix(manifestDigest, "sha256:") {
 		return Observation{}, errors.New("discovery assignment is invalid")
 	}
@@ -168,11 +245,11 @@ func CollectObservation(ctx context.Context, task TaskEnvelope, rootHandles map[
 	} else {
 		facts = append(facts, ObservationFact{Key: "compose.engine", Kind: "compose", Value: map[string]any{"available": false}, Provenance: []string{"observed:fixed-binary-probe"}, Confidence: 1})
 	}
-	if version, ok := safeCommandVersion(collectorContext, []string{"/usr/bin/psql", "/usr/local/bin/psql"}, "--version"); ok {
-		facts = append(facts, ObservationFact{Key: "database.postgresql", Kind: "database", Value: map[string]any{"version": version, "client_available": true}, Provenance: []string{"observed:psql-version"}, Confidence: 1})
-	} else {
-		facts = append(facts, ObservationFact{Key: "database.postgresql", Kind: "database", Value: map[string]any{"client_available": false}, Provenance: []string{"observed:fixed-binary-probe"}, Confidence: 1})
+	databaseFact, err := selectedDatabaseClientFact(collectorContext, databaseEngine)
+	if err != nil {
+		return Observation{}, err
 	}
+	facts = append(facts, databaseFact)
 	handles := make([]string, 0, len(rootHandles))
 	for handle := range rootHandles {
 		handles = append(handles, handle)
@@ -186,7 +263,7 @@ func CollectObservation(ctx context.Context, task TaskEnvelope, rootHandles map[
 	}
 	return Observation{
 		SchemaVersion: "operations.migration.observation.v1",
-		Collector:     map[string]any{"id": "askio-linux-host", "version": "1.0.0", "manifest_digest": manifestDigest},
+		Collector:     map[string]any{"id": "askio-linux-host", "version": "1.2.0", "manifest_digest": manifestDigest},
 		EndpointRole:  role, ObservedAt: time.Now().UTC().Format(time.RFC3339Nano), Completeness: "complete", Facts: facts,
 		Redactions: map[string]any{"rules_version": "1.0.0", "values_removed": 0, "canary_hits": 0},
 	}, nil

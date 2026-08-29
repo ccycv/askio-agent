@@ -15,6 +15,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 )
@@ -27,6 +28,24 @@ var supportedPrimitives = map[string]struct{}{
 	"migration.postgres.inspect.v1": {}, "migration.postgres.dump.v1": {},
 	"migration.postgres.reset-empty-target.v1": {}, "migration.postgres.restore.v1": {},
 	"migration.postgres.verify.v1": {}, "migration.compose.inspect.v1": {},
+	"migration.postgres.logical-preflight.v1":          {},
+	"migration.postgres.logical-schema-dump.v1":        {},
+	"migration.postgres.logical-restore-schema.v1":     {},
+	"migration.postgres.logical-prepare-source.v1":     {},
+	"migration.postgres.logical-start-subscription.v1": {},
+	"migration.postgres.logical-finalize-source.v1":    {},
+	"migration.postgres.logical-finalize-target.v1":    {},
+	"migration.postgres.logical-cleanup-target.v1":     {},
+	"migration.postgres.logical-cleanup-source.v1":     {},
+	"migration.mysql.inspect.v1":                       {}, "migration.mysql.dump.v1": {},
+	"migration.mysql.reset-empty-target.v1": {}, "migration.mysql.restore.v1": {},
+	"migration.mysql.verify.v1":    {},
+	"migration.mongodb.inspect.v1": {}, "migration.mongodb.dump.v1": {},
+	"migration.mongodb.reset-empty-target.v1": {}, "migration.mongodb.restore.v1": {},
+	"migration.mongodb.verify.v1": {},
+	"migration.redis.inspect.v1":  {}, "migration.redis.dump.v1": {},
+	"migration.redis.reset-empty-target.v1": {}, "migration.redis.restore.v1": {},
+	"migration.redis.verify.v1":             {},
 	"migration.compose.preflight-target.v1": {},
 	"migration.compose.render.v1":           {}, "migration.compose.start-isolated.v1": {},
 	"migration.compose.stop.v1":     {},
@@ -35,18 +54,20 @@ var supportedPrimitives = map[string]struct{}{
 }
 
 type NativeExecutor struct {
-	rootHandles   map[string]string
-	resolver      *ScopeResolver
-	broker        *BrokerClient
-	bindings      BindingResolver
-	tickets       TicketResolver
-	stateDir      string
-	agentID       string
-	identity      *Identity
-	backendKeyID  string
-	backendPublic ed25519.PublicKey
-	capacityCheck func(string, int64) error
-	logger        *slog.Logger
+	rootHandles            map[string]string
+	resolver               *ScopeResolver
+	broker                 *BrokerClient
+	bindings               BindingResolver
+	tickets                TicketResolver
+	stateDir               string
+	agentID                string
+	identity               *Identity
+	backendKeyID           string
+	backendPublic          ed25519.PublicKey
+	capacityCheck          func(string, int64) error
+	oplogWindowHookForTest func(context.Context, mongodbBinding) error
+	logger                 *slog.Logger
+	composeSecretMu        sync.Mutex
 }
 
 func (e *NativeExecutor) ensureCapacity(path string, requiredBytes int64) error {
@@ -67,6 +88,9 @@ func NewNativeExecutor(rootHandles map[string]string, brokerSocket, stateDir str
 	if err := os.MkdirAll(stateDir, 0o700); err != nil {
 		return nil, err
 	}
+	if err := recoverComposeRuntimeSecrets(stateDir); err != nil {
+		return nil, fmt.Errorf("recover Compose runtime secrets: %w", err)
+	}
 	return &NativeExecutor{rootHandles: rootHandles, resolver: resolver, broker: NewBrokerClient(brokerSocket), stateDir: stateDir}, nil
 }
 
@@ -80,6 +104,12 @@ func (e *NativeExecutor) SetTicketResolver(resolver TicketResolver) {
 
 func (e *NativeExecutor) SetLogger(logger *slog.Logger) {
 	e.logger = logger
+}
+
+func (e *NativeExecutor) WriterFenceAttestations(ctx context.Context) ([]WriterFenceAttestation, error) {
+	attestationContext, cancel := context.WithTimeout(ctx, 8*time.Second)
+	defer cancel()
+	return e.broker.AttestWriterFences(attestationContext)
 }
 
 func (e *NativeExecutor) ConfigureDataPlaneIdentity(agentID, backendKeyID, backendPublicKeyBase64 string, identity *Identity) error {
@@ -375,6 +405,54 @@ func (e *NativeExecutor) Execute(ctx context.Context, task TaskEnvelope, progres
 		outputs, err = e.postgresRestore(ctx, task, inputs, progress)
 	case "migration.postgres.verify.v1":
 		outputs, err = e.postgresVerify(ctx, task, inputs)
+	case "migration.postgres.logical-preflight.v1":
+		outputs, err = e.postgresLogicalPreflight(ctx, task, inputs)
+	case "migration.postgres.logical-schema-dump.v1":
+		outputs, err = e.postgresLogicalSchemaDump(ctx, task, inputs, progress)
+	case "migration.postgres.logical-restore-schema.v1":
+		outputs, err = e.postgresLogicalRestoreSchema(ctx, task, inputs)
+	case "migration.postgres.logical-prepare-source.v1":
+		outputs, err = e.postgresLogicalPrepareSource(ctx, task, inputs)
+	case "migration.postgres.logical-start-subscription.v1":
+		outputs, err = e.postgresLogicalStartSubscription(ctx, task, inputs, progress)
+	case "migration.postgres.logical-finalize-source.v1":
+		outputs, err = e.postgresLogicalFinalizeSource(ctx, task, inputs, progress)
+	case "migration.postgres.logical-finalize-target.v1":
+		outputs, err = e.postgresLogicalFinalizeTarget(ctx, task, inputs, progress)
+	case "migration.postgres.logical-cleanup-target.v1":
+		outputs, err = e.postgresLogicalCleanupTarget(ctx, task, inputs)
+	case "migration.postgres.logical-cleanup-source.v1":
+		outputs, err = e.postgresLogicalCleanupSource(ctx, task, inputs)
+	case "migration.mysql.inspect.v1":
+		outputs, err = e.mysqlInspect(ctx, task, inputs)
+	case "migration.mysql.dump.v1":
+		outputs, err = e.mysqlDump(ctx, task, inputs, progress)
+	case "migration.mysql.reset-empty-target.v1":
+		outputs, err = e.mysqlReset(ctx, task, inputs)
+	case "migration.mysql.restore.v1":
+		outputs, err = e.mysqlRestore(ctx, task, inputs, progress)
+	case "migration.mysql.verify.v1":
+		outputs, err = e.mysqlVerify(ctx, task, inputs)
+	case "migration.mongodb.inspect.v1":
+		outputs, err = e.mongodbInspect(ctx, task, inputs)
+	case "migration.mongodb.dump.v1":
+		outputs, err = e.mongodbDump(ctx, task, inputs, progress)
+	case "migration.mongodb.reset-empty-target.v1":
+		outputs, err = e.mongodbReset(ctx, task, inputs)
+	case "migration.mongodb.restore.v1":
+		outputs, err = e.mongodbRestore(ctx, task, inputs, progress)
+	case "migration.mongodb.verify.v1":
+		outputs, err = e.mongodbVerify(ctx, task, inputs)
+	case "migration.redis.inspect.v1":
+		outputs, err = e.redisInspect(ctx, task, inputs)
+	case "migration.redis.dump.v1":
+		outputs, err = e.redisDump(ctx, task, inputs, progress)
+	case "migration.redis.reset-empty-target.v1":
+		outputs, err = e.redisReset(ctx, task, inputs)
+	case "migration.redis.restore.v1":
+		outputs, err = e.redisRestore(ctx, task, inputs, progress)
+	case "migration.redis.verify.v1":
+		outputs, err = e.redisVerify(ctx, task, inputs)
 	case "migration.files.sync.v1":
 		outputs, err = e.filesSync(ctx, task, inputs, progress)
 	default:
