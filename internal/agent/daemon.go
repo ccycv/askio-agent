@@ -175,6 +175,10 @@ func (d *Daemon) Run(ctx context.Context) error {
 		d.capabilitiesLoop(ctx)
 	}()
 
+	if d.cfg.Inventory != nil && d.cfg.Inventory.Enabled {
+		wg.Add(1)
+		go func() { defer wg.Done(); d.inventoryLoop(ctx) }()
+	}
 	err := d.schedulerLoop(ctx)
 	wg.Wait()
 	return err
