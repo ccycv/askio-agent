@@ -201,9 +201,9 @@
         "PAIR-U24-PHP:before:php8.3-xml",
         "PAIR-U24-PHP:before:php8.3-mysql"
       ],
-      "captureDigest": "694eff65bc4f975ca132e5ea2c5aa1a6aafc391ac9495d425838ab34488a082a",
-      "reportDigest": "52421056635ce16430af623d25fa636a1781d85ce235cd148f68e7d2fdcf25c4",
-      "validationScanId": "vulnerability-scan_a546c4dfed58f60181bbe214fccad45a984a16e028bc2765c3c1b9014a93fd9f"
+      "captureDigest": "f060c7d8104c0d2a8141c80dad6d7ffe9a0c15229ed6ea075a68348132bbb0fe",
+      "reportDigest": "18f6ff5878a03351ba497fcac12dc3dba3aad42760cd97144c2f8d015c979d7b",
+      "validationScanId": "vulnerability-scan_21d4472b01d1bb0a599d2a130a8b943ee58f478430412b4bc22ffce7cb371523"
     },
     {
       "id": "u24-php-after",
@@ -375,9 +375,9 @@
         "PAIR-U24-PHP:after:php8.3-xml",
         "PAIR-U24-PHP:after:php8.3-mysql"
       ],
-      "captureDigest": "936c00aabbcfb0ea095fcf6b2d05376c8926ebc4bb7bc6da1aab9176f9b88923",
-      "reportDigest": "25a12e0614b090ce304679be5ebf3edba22d04cd0421e9da735280d96d82f6cd",
-      "validationScanId": "vulnerability-scan_2b80a3e28caf092fd4fe26d462ba151fc70870320ac9740e232b51edb3646930"
+      "captureDigest": "ca429ec7356e3d4dd89dd019042af619db18cfa35243bfe51aab73dffb1d46aa",
+      "reportDigest": "49618ba537b2094c896737fda67d2f62f4f4fa0e48fd53ed8b10384ba56c217f",
+      "validationScanId": "vulnerability-scan_846744ff00e124fac3c9e62508f3b0de8b81422ffd11e9ec1b3abd1165dec036"
     },
     {
       "id": "d13-php-before",
@@ -549,9 +549,9 @@
         "PAIR-D13-PHP:before:php8.4-xml",
         "PAIR-D13-PHP:before:php8.4-mysql"
       ],
-      "captureDigest": "d0838fed955954e54c5558fdbcdb20f6c9a305a847304ceb2aa19897c308e788",
-      "reportDigest": "ee7f64fed446ef5f328046e7b1b2d5d78ae0d800721f13e8c18bbf338ba79663",
-      "validationScanId": "vulnerability-scan_d967e3ee7292136fcd9c112a3f880a7295d8bfa4ec95f1a6197387c499d92f13"
+      "captureDigest": "97115e3642eb8bd55b3c7c3a9c54991ff816fa721628e4063e6a7f3bd02c9ff1",
+      "reportDigest": "07f546a0ba10e0a1d555dd0622608945c7c552b148423f229d6c03d5d4886320",
+      "validationScanId": "vulnerability-scan_82832d6f79e8e75ecab68da32604fb41e69f0c76da9b945535fb4ab1a211c972"
     },
     {
       "id": "d13-php-after",
@@ -723,9 +723,9 @@
         "PAIR-D13-PHP:after:php8.4-xml",
         "PAIR-D13-PHP:after:php8.4-mysql"
       ],
-      "captureDigest": "dc1e1b93ca67c850fd07ddba0238535ab24548c339c57fed28242fe01d293f8f",
-      "reportDigest": "d8a89c8ffb5e699bd9e483f7b7c7dde571a06dc616b52e6fc5b8c0545cbd56c0",
-      "validationScanId": "vulnerability-scan_8e7d49468115ea813eb9cf3e7f9a952dc04c120d1a6b88106e6524712b852f24"
+      "captureDigest": "fe37d2f1d21bc7092eae99ac898ac194adcadf517ba31342104b550937d4ebe2",
+      "reportDigest": "7fe67b2a3eb2b85c674cba253946100c4039e6f683088c777912f19db7d437cc",
+      "validationScanId": "vulnerability-scan_6cfc91aa82a831cbe432225ee4332545c7e5bbc2be6daf4ed499bc7fe8b33343"
     },
     {
       "id": "u24-apache-0",
@@ -753,9 +753,9 @@
       "pairEndpoints": [
         "PAIR-U24-APACHE:before:apache2-bin"
       ],
-      "captureDigest": "76adb2c9f9ae1fc82e9d12e68e5089cf6cb47df117ff964e952ea7aaf8691486",
-      "reportDigest": "be92b3aea11082b274c604c2bd9fa859da65e43096623f48c71a952f91fc60a5",
-      "validationScanId": "vulnerability-scan_280acaea6a5f8b7df2d32f6a88b3b1d057459004f160beffed3f7367d51dbdda"
+      "captureDigest": "51203487fd71e18d551c79fe8bc763fbdc50ac110c39db060b295f6e16d07777",
+      "reportDigest": "9f00f9f066424e4e8ccbdf525a96656d80e65f693094abe9fac8ad7adfd6450a",
+      "validationScanId": "vulnerability-scan_3f4e00feecb2f3044ab31abe7d082751fa567f7734aff7cf6bda0eb2151a5721"
     },
     {
       "id": "u24-apache-1",
@@ -784,9 +784,9 @@
         "PAIR-U24-APACHE:after:apache2-bin",
         "PAIR-U24-APACHE-HTTP:before:apache2-bin"
       ],
-      "captureDigest": "23f24a82e62fac4a6cc8b2bd4fabe68ca4806725121b7664475ede0cc2779423",
-      "reportDigest": "474b64511ccfbc7166f845af8e694df4e10ecef9c45d6307f48a1a91f777715e",
-      "validationScanId": "vulnerability-scan_6ecd8547a0977d182bbaa41c3d5cf8361c4fc0b68f16f51bde6ed4b42cd80839"
+      "captureDigest": "a2487a86b036b8b7487348fb80404322cbcacdbd09e764a43f61d90af39a1869",
+      "reportDigest": "139d43eba5d770456ff94e0b117686bbb7c15eb60b8f2f54903058bb4dea3929",
+      "validationScanId": "vulnerability-scan_4a9295183d553cd24d1eb08d9febf17efe3e22418636f52ca4d82363c9ea9d33"
     },
     {
       "id": "u24-apache-2",
@@ -814,9 +814,9 @@
       "pairEndpoints": [
         "PAIR-U24-APACHE-HTTP:after:apache2-bin"
       ],
-      "captureDigest": "7b0983fd750e68eb9da5de7440976262f66dc95cae67411ae8e7a157bb63800a",
-      "reportDigest": "29da4aedb98962356f5396693ea3db0049782ee48e60fa99f7aef4399ddfbcf6",
-      "validationScanId": "vulnerability-scan_c93078dc69a04d039bafb1cd8051fa57211bc67d1027393f10e22aa784552da6"
+      "captureDigest": "4a55b483d603e3ec0972f32c56f73fe343a2038c0ed1dc6c64c62361444fd017",
+      "reportDigest": "c9f7de5b67053b842af349eb21bb41fb646a229d9217481bd4c79bbe4bbf03f5",
+      "validationScanId": "vulnerability-scan_d08807ece8b3a0559671d9034839af8981520346513b4c19019c7be8269732bd"
     },
     {
       "id": "d13-apache-0",
@@ -844,9 +844,9 @@
       "pairEndpoints": [
         "PAIR-D13-APACHE:before:apache2-bin"
       ],
-      "captureDigest": "6d990046cace32a4b203adb1844240216df7085779b7799033b46327a2cdeea3",
-      "reportDigest": "632250c59e5d14dca10bd6ccf20183557a4d5fac70803c9f5c922624a6997d2b",
-      "validationScanId": "vulnerability-scan_f754d3c22c5c15c63fcd970110aedc13f90be60db84770384f3fa3c757b32ed9"
+      "captureDigest": "18b804e22012c087a6110a41355eb44133b788991c5c5d3c54a14c3481081fec",
+      "reportDigest": "ead4561f6b7f188cbe376bf76abae0f026adabcdb074d9b38b6a30392aecf279",
+      "validationScanId": "vulnerability-scan_672eb231fa959a1fa3b48f16c0b63cc81d65705d90d03597bee5e635245aa840"
     },
     {
       "id": "d13-apache-1",
@@ -875,9 +875,9 @@
         "PAIR-D13-APACHE:after:apache2-bin",
         "PAIR-D13-APACHE-HTTP:before:apache2-bin"
       ],
-      "captureDigest": "c1872a9a4ae379fe078d276e1d2219c3bcf0841531b83eb974c4618e4ec4fb9f",
-      "reportDigest": "d0dc74423c5c34e36adc1a0816b9c217e05045d4e095ca19eb2b26b3984e60d7",
-      "validationScanId": "vulnerability-scan_a3609ba8ebdd3a39eb362d4afafb286f76ec2fca0b1a8bb24af249ba9f31d05e"
+      "captureDigest": "266491e6ea2fdefe7a81d03127df310ff265dd9bfb349e401ebe3f9a55e70adc",
+      "reportDigest": "53e1c86ce33baba10277cb2b0fd59ca2e16672d3e3daa62b8927318cbd975e4b",
+      "validationScanId": "vulnerability-scan_91da7669823ab0c81cdcc95be0901c68bba7ddfb5e6d5cd2b9d6a50ad7db3bb7"
     },
     {
       "id": "d13-apache-2",
@@ -905,9 +905,9 @@
       "pairEndpoints": [
         "PAIR-D13-APACHE-HTTP:after:apache2-bin"
       ],
-      "captureDigest": "a058ff0afa6d6966e95017741e6420524d28169b5778de00c161ef85aad266df",
-      "reportDigest": "95b4e543eed5abdfcd9aa6a1dc9a7ff6b4fcec5867ee0465bd8caeaa407985ee",
-      "validationScanId": "vulnerability-scan_7ddc52fa0f8b9ebbd3bfde2bfe50122b94120d7a3bb973eccbeeffe89d3de090"
+      "captureDigest": "08ff44ab2cd060ef06518428b1e7bab6e1b3c4d747d41167cbe10ab22b827cf1",
+      "reportDigest": "0857fde20d9f843f145f95f3f652a2a16345f2c589bf20d0bbba70e12c3e5f25",
+      "validationScanId": "vulnerability-scan_c73483873154929e99e1966d65bf2a1629e3cf91b17f034df7bea32a2a60dbdb"
     },
     {
       "id": "u24-nginx-0",
@@ -935,9 +935,9 @@
       "pairEndpoints": [
         "PAIR-U24-NGINX:before:nginx"
       ],
-      "captureDigest": "df1791d92d570c8d7c0602bb9713706a34b6c08c18c10339d0ace1211b399b7c",
-      "reportDigest": "8c43186215d18960fb819685e2aa37ef54ec2bf7a4a4b092939b5a7461e2fee6",
-      "validationScanId": "vulnerability-scan_c8d76fe7ffa22db5aa541681ade241ff86920ee5edb7284d4088d7b11757120e"
+      "captureDigest": "75a68bec2a16ee6bf885cee346cce920311e7f4e5c7fe8aec3365df9ddfb8568",
+      "reportDigest": "5d06f509075207bb50ac6269a74940333b8ab1a11b412ee9036cd965901e0a18",
+      "validationScanId": "vulnerability-scan_3fd5ff60b9e97c8b9ae2d592430baedaf3bb4a2882f6740a82a5beb4a596e4f8"
     },
     {
       "id": "u24-nginx-1",
@@ -965,9 +965,9 @@
       "pairEndpoints": [
         "PAIR-U24-NGINX:after:nginx"
       ],
-      "captureDigest": "3c02e14966c51d0c722f4d03c7683056664736a432d3123e9abe9e6882779af8",
-      "reportDigest": "5882fd6f5e7f880d2f66f63911ec80a1eefba50b250d72cdb8e75295641c4ddd",
-      "validationScanId": "vulnerability-scan_4fd59095ee29120e247b248ae8e8630d75c70b97a613c08ee31d9cbcb78f7dd9"
+      "captureDigest": "acc0db876e6591061ffbd80fab2b4c1c2bfc6f9f3b41f3551fc046ad8dde3dfa",
+      "reportDigest": "34a82544c603c9cebcc885c031e0c4bd643a8a84cadaed3c3db989c6ebb85aa7",
+      "validationScanId": "vulnerability-scan_ca83494e3f624428d80795ddb16478a1e8d88d885af5ba425e65c5c29b3e51ae"
     },
     {
       "id": "d13-nginx-0",
@@ -995,9 +995,9 @@
       "pairEndpoints": [
         "PAIR-D13-NGINX:before:nginx"
       ],
-      "captureDigest": "db0442448e118692f5af8a0cf77c34f9f02705da2c352aab80f51d0ac646e51e",
-      "reportDigest": "0d8a4ea6ebc6e3add3415e369300fb188ea905480803831d6fd553aa0dc67c52",
-      "validationScanId": "vulnerability-scan_ef39496fd4228693b2d24a5751d48d2a7fbc7b195c54727dc099310d9de9d6cd"
+      "captureDigest": "4cc56ee8b24eeb2776001d311bf8630ed2b58249da292eaad7e61dd9faefe3fd",
+      "reportDigest": "ca1f0e7bdfcf377640bf493ba5bf50df5f2ae55686a9a2fc8d97f424e0842717",
+      "validationScanId": "vulnerability-scan_7e9add23502e6418b84dcafd2e3d29be894628d3e9871126d41fcadcc450da06"
     },
     {
       "id": "d13-nginx-1",
@@ -1025,9 +1025,9 @@
       "pairEndpoints": [
         "PAIR-D13-NGINX:after:nginx"
       ],
-      "captureDigest": "9ca67be0784daf4ff238707861337791baddab9607c3c657f98e3488a033f699",
-      "reportDigest": "d28ee64b26245622c4472798ecb8b8b7e7263819443f1b6644337daea53105cd",
-      "validationScanId": "vulnerability-scan_75b7a815a5cf925d3aefdf0677db8a2bf2b7bc762ba8371399a2ef025f6bdb2c"
+      "captureDigest": "df1ad9fac99bc31d6e7e046ffe9553e3ab960f9ccd25772878fd590415bc1333",
+      "reportDigest": "08395c46c5caa95592aa19da7f137039a2c51dc098c4e9a53cce7955a0fc360f",
+      "validationScanId": "vulnerability-scan_95ecf9bf243a92c85ea814b83690de779eb0f6deb73bb93574f264b4f35ea9d9"
     },
     {
       "id": "u24-missing-archive",
@@ -1057,9 +1057,9 @@
       "pairEndpoints": [
         "PAIR-U24-NGINX:before:nginx"
       ],
-      "captureDigest": "204c7bfbaf06895d2c5f03fd55cd246906b13be3a79853d561ce05b918539258",
-      "reportDigest": "f20cb6d6262cd4c70bbe6c6f1a07308b28cc3a2720b1c1bc67b236e3f590f79b",
-      "validationScanId": "vulnerability-scan_00162ea5b55e7784e5c681640d783628710dd2a933076fdba713482edb51bb23"
+      "captureDigest": "e55654d3a8572f25fb385d0bf71f21e47a443761a9d1e06c7cae4b2525202f75",
+      "reportDigest": "77f2159d37cb24906b25a78dacdfc02505684d752b0b6b0409d6721b340c5426",
+      "validationScanId": "vulnerability-scan_9d83b8e07b834a765bc2f746c36218d7ca6555a4373ffa1f17eab00554e4b107"
     },
     {
       "id": "u24-modified-file",
@@ -1089,9 +1089,9 @@
       "pairEndpoints": [
         "PAIR-U24-NGINX:before:nginx"
       ],
-      "captureDigest": "7d8568ae8f370ef2fae40db049c0b04327f0a81f38d9fc333d3a8a3ebb4bac23",
-      "reportDigest": "e1f4eb9dc2c0692afb5f5d9ccea7313a0a9a82c8c2c0f9bdf4bebbc37bee519f",
-      "validationScanId": "vulnerability-scan_5877bc17585af3b924bad3f327438c947d4b4577a1df6fe8d05c1f2edfaeb908"
+      "captureDigest": "6ae274e1597b420683c55c3c7cf3af5376fa75a718fc54138e023abd3a1a11b6",
+      "reportDigest": "0779db40617ea7c28e8d283bdbff35905bd57aacb427e04322bac0731879c9b3",
+      "validationScanId": "vulnerability-scan_148db8cb899bd5176da9ebcbaf1e8c065358c43574d008c0cf72a93838544598"
     },
     {
       "id": "u24-signed-body-tamper",
@@ -1121,9 +1121,9 @@
       "pairEndpoints": [
         "PAIR-U24-NGINX:before:nginx"
       ],
-      "captureDigest": "59d20643250e5c416792e2430ed6aad221d42e4f4480ee0b6fc3a4bf06b7e74d",
-      "reportDigest": "efa607c84d02a01513edeb17e0b47d42889960b34e1ecae5234a32986533f367",
-      "validationScanId": "vulnerability-scan_74e13bb9e898019db2edae2e0752c7fc6bec5efe115112e529f318bb64996510"
+      "captureDigest": "23cb7fd1d9ff68c34a7d6d7afc2ab9bdcb9a62e52270fd7bb8978ddfaaee6118",
+      "reportDigest": "e204c3c557999e3547347542c7a015d257e743a0064b6f286345c63c34be57ce",
+      "validationScanId": "vulnerability-scan_ca48919cd8ff3ffe150f2f8030c4383cd051eb3eced236f7f45f4ab0ab515d14"
     },
     {
       "id": "d13-missing-archive",
@@ -1153,9 +1153,9 @@
       "pairEndpoints": [
         "PAIR-D13-NGINX:before:nginx"
       ],
-      "captureDigest": "30ea6ef7b047bc24977ea92d8f2c689bc3e50584ab0a410112b5a07ddfa01ea6",
-      "reportDigest": "8fa628e499341f99ad29fffe9cc75a575c867c58d74af8592da6d8a9a0b99233",
-      "validationScanId": "vulnerability-scan_1a20878d557a772b779818844fc0e0a5765ec7d3386adf32c9ad95b2ba080d9a"
+      "captureDigest": "c6419b5f57ef665e7363378d42a227e2880fabe36d3e83b2e38d7bf9e12e38fb",
+      "reportDigest": "9f2d04e1f9fe92e7aab6849909db04bbc2778d158a83b1d9548f19f7d28d125d",
+      "validationScanId": "vulnerability-scan_40571eed431209b4e6beead5884d74b6262a362b60b628aba455a10b8065a8e0"
     },
     {
       "id": "d13-modified-file",
@@ -1185,9 +1185,9 @@
       "pairEndpoints": [
         "PAIR-D13-NGINX:before:nginx"
       ],
-      "captureDigest": "4478348d5bef9a5db6080635135b8b669d132e385bf9de009d1dfaea86390dc5",
-      "reportDigest": "18af2cc9a80377aa8732965370f2a72ccc009d6611802c92225398273ce43c0e",
-      "validationScanId": "vulnerability-scan_c17650cb3934881b1b4e4565329725985cb59c5cb3e7a7a701d4100106ce1788"
+      "captureDigest": "3d355836022fc7fced5ca1ee9016c9bebfed4568ede415ee8fe825a6880a5f9e",
+      "reportDigest": "fab6af88dc2584d845d008e2d3e40c5bb157a858f8288db41b68ef3053da5201",
+      "validationScanId": "vulnerability-scan_1a55025eea0e939d82711cc0a39281c5ff5bba5a81bb2dfefdfc9f41f1b2935c"
     },
     {
       "id": "d13-signed-body-tamper",
@@ -1217,9 +1217,229 @@
       "pairEndpoints": [
         "PAIR-D13-NGINX:before:nginx"
       ],
-      "captureDigest": "8de1795b1718c431a1521faceeab5a03c98b6a106472ba0bf63e609e93cf9482",
-      "reportDigest": "cf81a547c7aecf606f538bf54328a808862470c28099d9304167fbddfc4bd6c3",
-      "validationScanId": "vulnerability-scan_9749cd5e17f41907696fd8dd84b9e726ffef721a43c5b7514ea4a5afcdb21fa7"
+      "captureDigest": "0cea700618234b97e916e8e77e4d2566540fdfd1a9ee361ba420ac462b822aa0",
+      "reportDigest": "bd5042c2d183986850e1d334cabb5f44cda567c91b34275960a8cac791a4cf3e",
+      "validationScanId": "vulnerability-scan_b045a41e1608065eba2499ae20e6e9655a51071cac82649bf06cd281e2eb4ce2"
     }
-  ]
+  ],
+  "backendRuntime": {
+    "startedAt": "2026-10-26T00:15:27.589Z",
+    "finishedAt": "2026-10-26T00:16:53.364Z",
+    "nodeVersion": "v22.23.4",
+    "filesStable": true,
+    "startDigest": "774fd09c48c4e371ea75d623528c80cad4efb8f29f0d54cc743f1b415aded1aa",
+    "endDigest": "774fd09c48c4e371ea75d623528c80cad4efb8f29f0d54cc743f1b415aded1aa",
+    "files": [
+      {
+        "path": "backend/apps/worker/src/vulnerability-evaluation.ts",
+        "bytes": 4350,
+        "sha256": "620b3f766cbd5119142a67a20acea5f69bbbaf13f41fbb40be68dbd9a94ec692"
+      },
+      {
+        "path": "backend/package-lock.json",
+        "bytes": 100050,
+        "sha256": "8f21b606b9f044ff90d788a1f3bcc7144e2562dcc65ae84e8f909363d86d5dc9"
+      },
+      {
+        "path": "backend/package.json",
+        "bytes": 1923,
+        "sha256": "49457626976b62d8f11674fa13f900a58890a1c618acf3c188461ce61dedb4d5"
+      },
+      {
+        "path": "backend/packages/crypto/src/index.ts",
+        "bytes": 3750,
+        "sha256": "04840c9929a7045178bf6db674969de64a44c9bda133f726eec036cb96b74432"
+      },
+      {
+        "path": "backend/packages/database/src/index.ts",
+        "bytes": 3619,
+        "sha256": "ff74d2d39001523fe8977baafd33c78cfd69294ff3ab8631112d0fddd0a2dd8c"
+      },
+      {
+        "path": "backend/packages/security/src/network.ts",
+        "bytes": 4356,
+        "sha256": "c6a87530cc0865286f3aa9d98772f9cbf6070baf41f5885e0ae5d24a227ec416"
+      },
+      {
+        "path": "backend/packages/vulnerabilities/fixtures/historical-vendor-facts.json",
+        "bytes": 11394,
+        "sha256": "c9a494a5e043953bfca6fa4c10155ac2ecc101330db06ce816013bdfd1c14eb0"
+      },
+      {
+        "path": "backend/packages/vulnerabilities/fixtures/source-adapters/debian-historical-model.json",
+        "bytes": 724,
+        "sha256": "9cbc61d71a3482163bf19ecedf1af13a9f849382574241b06511dd59aab50211"
+      },
+      {
+        "path": "backend/packages/vulnerabilities/fixtures/source-adapters/ubuntu-historical-model.json",
+        "bytes": 3291,
+        "sha256": "90aeedbe2a8e106db4e9cbcb85856befd55e0dbb9ff0360f56c94ab88e3b64ec"
+      },
+      {
+        "path": "backend/packages/vulnerabilities/scripts/run-native-provenance-integration.ts",
+        "bytes": 4257,
+        "sha256": "1cc7464e4562e3520dc9d6cd0ec341a1b26611f6ca2248dc3fe28bfbc8db0f35"
+      },
+      {
+        "path": "backend/packages/vulnerabilities/src/canonical.ts",
+        "bytes": 5321,
+        "sha256": "f745a30342fe9e7c7807333852f73508860f8d9ad94c0e9b8d6ac41f9bfb3150"
+      },
+      {
+        "path": "backend/packages/vulnerabilities/src/contracts.ts",
+        "bytes": 15046,
+        "sha256": "a8c61710308fc32a939c1ece57d5eb86d33a7b418f1f474a86a8b2b2be544dc7"
+      },
+      {
+        "path": "backend/packages/vulnerabilities/src/debian-version.ts",
+        "bytes": 3233,
+        "sha256": "34d1947f3c1652aeaa803705ee76e231e7b18d54e9865a37d4aa906139873b39"
+      },
+      {
+        "path": "backend/packages/vulnerabilities/src/evaluation-store.ts",
+        "bytes": 47182,
+        "sha256": "d365fa04a4be285a129c1d810aeb9dbc01299b4a9a7412a266435762ef8733d1"
+      },
+      {
+        "path": "backend/packages/vulnerabilities/src/evaluation.ts",
+        "bytes": 32568,
+        "sha256": "f92f0b584917005de6888fa717ae5d46636299802b40d35e68be0701c5bc3511"
+      },
+      {
+        "path": "backend/packages/vulnerabilities/src/inventory-contracts.ts",
+        "bytes": 6054,
+        "sha256": "908db2f751517146556cd05be1e6736b7b6da6ddb99128bbbdc1f7a3a894b90e"
+      },
+      {
+        "path": "backend/packages/vulnerabilities/src/inventory-db.ts",
+        "bytes": 8095,
+        "sha256": "26476e64795a1f2de42454b072430e521e4d6091eece6d9b42c56717efd48c7d"
+      },
+      {
+        "path": "backend/packages/vulnerabilities/src/inventory-service.ts",
+        "bytes": 17430,
+        "sha256": "11b2cff66cd50986afd80db9dae6cdf6c11f96574632f54b416ffea6bcba9322"
+      },
+      {
+        "path": "backend/packages/vulnerabilities/src/matcher.ts",
+        "bytes": 21646,
+        "sha256": "cf1c342fde28c596b25b552848595cc02ebb6aed58bc694194f07ed3a2a89279"
+      },
+      {
+        "path": "backend/packages/vulnerabilities/src/native-provenance.integration.test.ts",
+        "bytes": 20013,
+        "sha256": "df3ec9608213c54f41a24b1cfae6ccd5ceed0beee87a39827408efa2da637d48"
+      },
+      {
+        "path": "backend/packages/vulnerabilities/src/persistence.ts",
+        "bytes": 35484,
+        "sha256": "06cfa4348b06c0b4065437635b0ba2122811eb2de5a91f4b0f895ffa3b26b5f8"
+      },
+      {
+        "path": "backend/packages/vulnerabilities/src/provenance-contracts.ts",
+        "bytes": 11829,
+        "sha256": "bdba6c7043c4f34f898f306801c3272c900598ef448f81dc464376159f470e3f"
+      },
+      {
+        "path": "backend/packages/vulnerabilities/src/read-contracts.ts",
+        "bytes": 6119,
+        "sha256": "27b136f0c16d92c0fa86c7136cc805ac1297ec56bc08a433feac7687ca6021d1"
+      },
+      {
+        "path": "backend/packages/vulnerabilities/src/read-current-sql.ts",
+        "bytes": 2221,
+        "sha256": "f5f2172e8e7f64dfcb1ff9674f97d1fe9d60a0bd63433f67e50c4ba7975e35ad"
+      },
+      {
+        "path": "backend/packages/vulnerabilities/src/read-service.ts",
+        "bytes": 33674,
+        "sha256": "1c40305367deff193ad5c852e8cea81dc962f9e882ab41d240bd97a06d4492a1"
+      },
+      {
+        "path": "backend/packages/vulnerabilities/src/source-adapters.ts",
+        "bytes": 17552,
+        "sha256": "5bf2718ea20ba9625982a85875f5591b80f5b45cad3b3fc0a71ec71a15a1d418"
+      },
+      {
+        "path": "backend/packages/vulnerabilities/src/source-catalog.ts",
+        "bytes": 13350,
+        "sha256": "44ee94d6847bd6e381b7c13e3d6ff24f4e3e794be392582ced8257ba892be1e0"
+      },
+      {
+        "path": "backend/packages/vulnerabilities/src/source-service.ts",
+        "bytes": 15593,
+        "sha256": "568448bc5d500bb9181054cc98eb4b8c5401a64cd61e91e26361270c80b51fbc"
+      },
+      {
+        "path": "backend/packages/vulnerabilities/src/source-store.ts",
+        "bytes": 11858,
+        "sha256": "29fd411b52e743ac7f0b01ffc36b8eff2b1ce813daeab7861775106e5496e5fc"
+      },
+      {
+        "path": "backend/packages/vulnerabilities/src/source-transport.ts",
+        "bytes": 12813,
+        "sha256": "f7f95b3d7fc5ebc30378a0f734cebe73ac808e1c423af47e5e0b059ab1091bea"
+      },
+      {
+        "path": "backend/packages/vulnerabilities/src/test-postgres.ts",
+        "bytes": 5116,
+        "sha256": "c15ef75f2b05089ae7a38be9c096c797f498c8e45d3909396ff193b2a411dba4"
+      },
+      {
+        "path": "supabase/migrations/20261025120000_vulnerability_persistence.sql",
+        "bytes": 40659,
+        "sha256": "89fef79bcd553d4bcee508eee1ffb1529e38189da79afd870236c5ffb2d56172"
+      },
+      {
+        "path": "supabase/migrations/20261025140000_vulnerability_inventory_admission.sql",
+        "bytes": 21428,
+        "sha256": "8314ad8075fe1008b6ef819ff304c5fba3a17e71e612a256559056fd581f5dab"
+      },
+      {
+        "path": "supabase/migrations/20261025160000_vulnerability_source_lifecycle.sql",
+        "bytes": 12024,
+        "sha256": "0e43942ece84a9384aa9725d3466297c126dc4a94f086d14e60ce37c0aab257d"
+      },
+      {
+        "path": "supabase/migrations/20261025180000_vulnerability_evaluation.sql",
+        "bytes": 22741,
+        "sha256": "d3161b7034510e1b59ccdc4624399b802de3168595c94a3a3273608a4011dcf6"
+      },
+      {
+        "path": "supabase/migrations/20261025200000_vulnerability_reads.sql",
+        "bytes": 6554,
+        "sha256": "e6c37f8f18baf1427e9141fc486defeb1755329a47a2d0f396c5230f10a903d7"
+      },
+      {
+        "path": "supabase/migrations/20261025220000_vulnerability_capacity.sql",
+        "bytes": 69852,
+        "sha256": "6ef357f32ef499b012af878c353e5836db04799b041533641b660d9a9fadb9ca"
+      },
+      {
+        "path": "supabase/migrations/20261025225000_vulnerability_source_discovery.sql",
+        "bytes": 3284,
+        "sha256": "2ec2f326ca4a224500ed7c99d2fe236308c3910463d3f978729a183edf6d31da"
+      },
+      {
+        "path": "supabase/migrations/20261025230000_vulnerability_retention.sql",
+        "bytes": 24736,
+        "sha256": "f4a83168a71d2fce191d635533f86817a967dc4179f797935ef732115dba4228"
+      },
+      {
+        "path": "supabase/migrations/20261025233000_vulnerability_provenance.sql",
+        "bytes": 2342,
+        "sha256": "658111eac8a2120c9bff90c419307f5058baee3de95a42dc3733372fe10cd833"
+      },
+      {
+        "path": "supabase/migrations/20261025234000_vulnerability_retirement.sql",
+        "bytes": 115343,
+        "sha256": "23464bfd9d2f3c573af965f67f2950999869fb3df3942bda5b33dbd0c2ab2a8c"
+      },
+      {
+        "path": "supabase/migrations/20261025235000_vulnerability_source_retirement.sql",
+        "bytes": 32411,
+        "sha256": "26e9d6620ca3f5f9b9b34521703fbe00ca84c9a6fc3c3bde4bcf42532acc1e43"
+      }
+    ]
+  }
 }

@@ -8,7 +8,7 @@
     "passed": 21,
     "failed": 0,
     "skipped": 0,
-    "durationMs": 84204.75375,
+    "durationMs": 85736.943167,
     "positiveCaptures": 14,
     "uniquePublishedArchives": 46,
     "unknownNegativeCaptures": 6,
@@ -16,8 +16,15 @@
     "corePairs": 8,
     "corePairEndpoints": 16,
     "additionalPhpArchives": 32,
-    "receiptSha256": "b872e839aa5defd0e0ce0a041f5a9c1cc011464e631d879a42ee1dcbfe8e062f",
-    "backendRuntimeBinding": "Initial loaded-backend pass; no pre-spawn/post-exit backend source hash was recorded. A frozen-tree rerun is required before current integrated backend qualification."
+    "receiptSha256": "67a27be49be1042c5c12baae0a6db569641e7d409efb6072ec0dd9532beaf96f",
+    "backendRuntimeBinding": {
+      "filesStable": true,
+      "fileCount": 42,
+      "startDigest": "774fd09c48c4e371ea75d623528c80cad4efb8f29f0d54cc743f1b415aded1aa",
+      "endDigest": "774fd09c48c4e371ea75d623528c80cad4efb8f29f0d54cc743f1b415aded1aa",
+      "startedAt": "2026-10-26T00:15:27.589Z",
+      "finishedAt": "2026-10-26T00:16:53.364Z"
+    }
   },
   "fullUnitSuite": {
     "platform": "linux/arm64",

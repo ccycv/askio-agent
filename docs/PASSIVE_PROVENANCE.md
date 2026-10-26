@@ -175,8 +175,10 @@ Local qualification receipts are retained separately:
   46 unique signed-origin artifacts in 14 positive captures, all eight paired
   boundaries, 32 additional PHP artifacts, six unknown mutation captures and
   nine real Debian publisher-policy cases. The backend pipeline passed 21/21
-  without skips. Its initial loaded-backend pass is distinct from a later
-  frozen-backend source-hash attestation.
+  without skips. The accepted integration receipt binds 42 unchanged backend
+  runtime/schema/fixture files before child-process start and after completion.
+  A prior helper-file change was detected and that attempt was not accepted as
+  current-tree qualification.
 - [Source/binary manifest](qualification/passive-provenance-source-2026-10-26.json):
   the exact 136 Go source-file hashes and native test-binary digest.
 - [Verification boundaries](qualification/passive-provenance-verification-2026-10-26.json):
