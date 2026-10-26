@@ -179,6 +179,14 @@ Local qualification receipts are retained separately:
   runtime/schema/fixture files before child-process start and after completion.
   A prior helper-file change was detected and that attempt was not accepted as
   current-tree qualification.
+- [Updated backend cleanup receipt](qualification/passive-provenance-post-cleanup-2026-10-26.json):
+  a separate 21/21, zero-skip pipeline rerun after the backend evaluation cleanup
+  and fixture shutdown changes. The same native source/binary and corpus passed
+  in 87.929 seconds, with 42 unchanged backend runtime/schema/fixture files
+  before and after execution. Its receipt SHA256 is
+  `4f565e03763571ca6537dc00d7981d367aebec7a798e6a7c9731d800af0015cd`.
+  Both receipts describe their recorded backend file hashes; neither extends
+  qualification to subsequent backend revisions.
 - [Source/binary manifest](qualification/passive-provenance-source-2026-10-26.json):
   the exact 136 Go source-file hashes and native test-binary digest.
 - [Verification boundaries](qualification/passive-provenance-verification-2026-10-26.json):
