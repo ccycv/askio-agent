@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -31,6 +32,42 @@ func TestInventoryDedicatedBoundedProtocol(t *testing.T) {
 	}
 	if len(paths) != 1 || paths[0] != "/functions/v1/monitor-agent-inventory-claim" {
 		t.Fatal(paths)
+	}
+}
+
+func TestProvenanceCompletionHasSeparateBoundWithoutExpandingPagesOrResponses(t *testing.T) {
+	calls := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		body, e := io.ReadAll(io.LimitReader(r.Body, vulnerability.MaxProvenanceCompletionBytes+1))
+		if e != nil || len(body) > vulnerability.MaxProvenanceCompletionBytes {
+			t.Error("completion wire bound exceeded")
+		}
+		fmt.Fprint(w, `{}`)
+	}))
+	defer server.Close()
+	c, e := New(Options{BaseURL: server.URL, Token: "synthetic"})
+	if e != nil {
+		t.Fatal(e)
+	}
+	completion := vulnerability.Completion{Capture: vulnerability.Capture{Collector: vulnerability.CollectorIdentity{Name: "askio-dpkg-passive", Version: vulnerability.ProvenanceCollectorVersion}, Provenance: &vulnerability.ProvenanceReport{Sources: []vulnerability.ProvenanceSource{{SignedInRelease: strings.Repeat("x", 300000)}}}}}
+	if e = c.CompleteInventory(context.Background(), completion); e != nil {
+		t.Fatal(e)
+	}
+	completion.Capture.Collector.Version = vulnerability.CollectorVersion
+	if e = c.CompleteInventory(context.Background(), completion); e == nil {
+		t.Fatal("v1 completion limit widened")
+	}
+	completion.Capture.Collector.Version = vulnerability.ProvenanceCollectorVersion
+	if e = c.inventoryJSON(context.Background(), "monitor-agent-inventory-page", completion, nil); e == nil {
+		t.Fatal("page limit widened")
+	}
+	completion.Capture.Provenance.Sources[0].SignedInRelease = strings.Repeat("x", vulnerability.MaxProvenanceCompletionBytes)
+	if e = c.CompleteInventory(context.Background(), completion); e == nil {
+		t.Fatal("oversized completion sent")
+	}
+	if calls != 1 {
+		t.Fatalf("refused bodies reached transport: %d", calls)
 	}
 }
 func TestInventoryRefusesRedirectUnknownOversizeAndRawErrors(t *testing.T) {

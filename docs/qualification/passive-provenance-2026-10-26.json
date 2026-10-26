@@ -1,0 +1,1225 @@
+{
+  "schemaVersion": "1",
+  "mode": "retained-signed-corpus-controlled-dpkg-observation",
+  "manifestSha256": "65991d7cfd746bd9c1d65187a2971144985d8afd8165ae17d094aae6e4c1be3f",
+  "sourceManifestSha256": "cafaab3eb195918629022e7472d36ef4362904edeea6a06d01b867f2f0fb74ef",
+  "nativeTestBinarySha256": "b09ca758231ade1a338da772c3fca792238e0169bd55b7d923a31d058438fc73",
+  "nativeVerificationPlatform": "linux/amd64",
+  "toolchain": "go1.22.12",
+  "baseImages": [
+    "ubuntu@sha256:68ee22004a9109b44973313b02ff7b1de250f1de0f5ecb628d73f579aaff33ac",
+    "debian@sha256:62bd423aeee912639ca8ee681c2b762cb3e25137e0a92b20be455898a9f034ad"
+  ],
+  "signedOriginUniqueArtifacts": 46,
+  "positiveCaptures": 14,
+  "negativeCaptures": 6,
+  "corePairs": 8,
+  "corePairEndpoints": 16,
+  "additionalPhpBinaryArtifacts": 32,
+  "realPublisherPolicyCases": 9,
+  "unsupportedMatcherBinaries": [
+    "libapache2-mod-php8.3",
+    "libapache2-mod-php8.4"
+  ],
+  "unqualifiedCollectorBinaries": [
+    "nginx-common",
+    "apache2",
+    "apache2-data",
+    "apache2-utils"
+  ],
+  "observation": "Controlled dpkg status and exact payload bytes from retained originals; no package scripts executed. Backend admits an authenticated agent observation and does not independently reverify the signature/archive chain.",
+  "availability": "Ordinary APT caches may lack exact retained archives or indexes; those hosts remain unknown. No download, refresh, package repair, or release promotion.",
+  "advisoryBasis": "Selected retained factual models, explicitly not a current complete publisher feed.",
+  "cases": [
+    {
+      "id": "u24-php-before",
+      "role": "u24",
+      "status": "official",
+      "packages": [
+        {
+          "binaryName": "php8.3-cli",
+          "source": "php8.3",
+          "architecture": "amd64",
+          "version": "8.3.6-0ubuntu0.24.04.5",
+          "archiveSha256": "6eb6a52366076d8b94297410606d18ee734e76857ff23dcee1181c3192358424",
+          "archiveBytes": 1915104,
+          "releaseSha256": "9d9a3f50537156572b806b7395ce51b8df331a974c4293a301a937798405959a",
+          "compressedIndexSha256": "00b235f710d95ff6968a0e9b04c93d9e87c3ce4701cd6308aacaf30205d4490e",
+          "sourceName": "php8.3",
+          "sourceVersion": "8.3.6-0ubuntu0.24.04.5",
+          "origin": "official",
+          "provenanceStatus": "verified",
+          "provenanceReasons": [],
+          "fileManifestSha256": "405cde726fd9b0e2545325dfb50115dd459be6dc07358263cad19f6552ef47bb",
+          "comparedFiles": 13
+        },
+        {
+          "binaryName": "php8.3-fpm",
+          "source": "php8.3",
+          "architecture": "amd64",
+          "version": "8.3.6-0ubuntu0.24.04.5",
+          "archiveSha256": "40fad047b2bb553be29056ca643ae9bd5f549e701b8f5e62d04c434e19714f1e",
+          "archiveBytes": 1924734,
+          "releaseSha256": "9d9a3f50537156572b806b7395ce51b8df331a974c4293a301a937798405959a",
+          "compressedIndexSha256": "9dc53b369d7db890405e6ad7e8c1dedc89a5a3c58694ad8cd7fb6e40a2945194",
+          "sourceName": "php8.3",
+          "sourceVersion": "8.3.6-0ubuntu0.24.04.5",
+          "origin": "official",
+          "provenanceStatus": "verified",
+          "provenanceReasons": [],
+          "fileManifestSha256": "9dc0efdf84bc6aa6aeea001fc6ec4ee461f881d3de4b005dc7d3ef2bf1146024",
+          "comparedFiles": 16
+        },
+        {
+          "binaryName": "php8.3-common",
+          "source": "php8.3",
+          "architecture": "amd64",
+          "version": "8.3.6-0ubuntu0.24.04.5",
+          "archiveSha256": "88e574c369ddb4ea5d5eb8f7450957abbc7e7c45e84345723c9092d66cfa8270",
+          "archiveBytes": 740084,
+          "releaseSha256": "9d9a3f50537156572b806b7395ce51b8df331a974c4293a301a937798405959a",
+          "compressedIndexSha256": "00b235f710d95ff6968a0e9b04c93d9e87c3ce4701cd6308aacaf30205d4490e",
+          "sourceName": "php8.3",
+          "sourceVersion": "8.3.6-0ubuntu0.24.04.5",
+          "origin": "official",
+          "provenanceStatus": "verified",
+          "provenanceReasons": [],
+          "fileManifestSha256": "6d0695acf61c8a954d2cf69f5de8ceac500cae78310e6844b407f301b79fd33a",
+          "comparedFiles": 48
+        },
+        {
+          "binaryName": "php8.3-opcache",
+          "source": "php8.3",
+          "architecture": "amd64",
+          "version": "8.3.6-0ubuntu0.24.04.5",
+          "archiveSha256": "164ee528cbef4d4b04de954fce593932fcbb77730b8f4cac6bc366e703961bcc",
+          "archiveBytes": 371472,
+          "releaseSha256": "9d9a3f50537156572b806b7395ce51b8df331a974c4293a301a937798405959a",
+          "compressedIndexSha256": "00b235f710d95ff6968a0e9b04c93d9e87c3ce4701cd6308aacaf30205d4490e",
+          "sourceName": "php8.3",
+          "sourceVersion": "8.3.6-0ubuntu0.24.04.5",
+          "origin": "official",
+          "provenanceStatus": "verified",
+          "provenanceReasons": [],
+          "fileManifestSha256": "5ad6b06ef631b54f34f961d7d69f6c0c1741bea1ea5fd13409036af92748b677",
+          "comparedFiles": 6
+        },
+        {
+          "binaryName": "php8.3-readline",
+          "source": "php8.3",
+          "architecture": "amd64",
+          "version": "8.3.6-0ubuntu0.24.04.5",
+          "archiveSha256": "475cd488853196a0b379ff7cd8220c344a58a776b8c27b2a69fbca04d30deabf",
+          "archiveBytes": 13460,
+          "releaseSha256": "9d9a3f50537156572b806b7395ce51b8df331a974c4293a301a937798405959a",
+          "compressedIndexSha256": "00b235f710d95ff6968a0e9b04c93d9e87c3ce4701cd6308aacaf30205d4490e",
+          "sourceName": "php8.3",
+          "sourceVersion": "8.3.6-0ubuntu0.24.04.5",
+          "origin": "official",
+          "provenanceStatus": "verified",
+          "provenanceReasons": [],
+          "fileManifestSha256": "827edafacf90e4c351f3a8d4924c13b768d983872c2add6cc9c4003076858888",
+          "comparedFiles": 6
+        },
+        {
+          "binaryName": "php8.3-curl",
+          "source": "php8.3",
+          "architecture": "amd64",
+          "version": "8.3.6-0ubuntu0.24.04.5",
+          "archiveSha256": "02cfa7b8e3562e7ff5a9ea7553430d509347224269fefefc70f9b74dd9a2f800",
+          "archiveBytes": 40308,
+          "releaseSha256": "9d9a3f50537156572b806b7395ce51b8df331a974c4293a301a937798405959a",
+          "compressedIndexSha256": "00b235f710d95ff6968a0e9b04c93d9e87c3ce4701cd6308aacaf30205d4490e",
+          "sourceName": "php8.3",
+          "sourceVersion": "8.3.6-0ubuntu0.24.04.5",
+          "origin": "official",
+          "provenanceStatus": "verified",
+          "provenanceReasons": [],
+          "fileManifestSha256": "d0c2121f80c6695f7f80fcfa7ae973db9ace5dbaebe19578c72110cda112d4b9",
+          "comparedFiles": 6
+        },
+        {
+          "binaryName": "php8.3-mbstring",
+          "source": "php8.3",
+          "architecture": "amd64",
+          "version": "8.3.6-0ubuntu0.24.04.5",
+          "archiveSha256": "c5083c4ae8c1c7d0aa1c00c0fbde3e73878646fa46f02a1dbfcdc948920ae2af",
+          "archiveBytes": 511522,
+          "releaseSha256": "9d9a3f50537156572b806b7395ce51b8df331a974c4293a301a937798405959a",
+          "compressedIndexSha256": "00b235f710d95ff6968a0e9b04c93d9e87c3ce4701cd6308aacaf30205d4490e",
+          "sourceName": "php8.3",
+          "sourceVersion": "8.3.6-0ubuntu0.24.04.5",
+          "origin": "official",
+          "provenanceStatus": "verified",
+          "provenanceReasons": [],
+          "fileManifestSha256": "ce81056ea1cb1d24c1a053b938e4cefe75dde7c236eb9c92a3c2b29500f4790e",
+          "comparedFiles": 6
+        },
+        {
+          "binaryName": "php8.3-xml",
+          "source": "php8.3",
+          "architecture": "amd64",
+          "version": "8.3.6-0ubuntu0.24.04.5",
+          "archiveSha256": "5d26000f60f2e7e21990855c65d141a66335854a36e7efdcfa1cdc03039f0ab7",
+          "archiveBytes": 126074,
+          "releaseSha256": "9d9a3f50537156572b806b7395ce51b8df331a974c4293a301a937798405959a",
+          "compressedIndexSha256": "00b235f710d95ff6968a0e9b04c93d9e87c3ce4701cd6308aacaf30205d4490e",
+          "sourceName": "php8.3",
+          "sourceVersion": "8.3.6-0ubuntu0.24.04.5",
+          "origin": "official",
+          "provenanceStatus": "verified",
+          "provenanceReasons": [],
+          "fileManifestSha256": "fee4c0df7423ed413e57a7bb3a5c423012c09225f97a37c7a553d731fa8beac9",
+          "comparedFiles": 16
+        },
+        {
+          "binaryName": "php8.3-mysql",
+          "source": "php8.3",
+          "architecture": "amd64",
+          "version": "8.3.6-0ubuntu0.24.04.5",
+          "archiveSha256": "fc397098f63db0c92c08fb9208504a8510bcb036c4ac73a9ee25bf3e6496fa30",
+          "archiveBytes": 126998,
+          "releaseSha256": "9d9a3f50537156572b806b7395ce51b8df331a974c4293a301a937798405959a",
+          "compressedIndexSha256": "00b235f710d95ff6968a0e9b04c93d9e87c3ce4701cd6308aacaf30205d4490e",
+          "sourceName": "php8.3",
+          "sourceVersion": "8.3.6-0ubuntu0.24.04.5",
+          "origin": "official",
+          "provenanceStatus": "verified",
+          "provenanceReasons": [],
+          "fileManifestSha256": "437e08d0463e63f25ff012f5e9f5c8761054cb18fb85f0104c8bbc2114969af4",
+          "comparedFiles": 10
+        }
+      ],
+      "pairEndpoints": [
+        "PAIR-U24-PHP:before:php8.3-cli",
+        "PAIR-U24-PHP:before:php8.3-fpm",
+        "PAIR-U24-PHP:before:php8.3-common",
+        "PAIR-U24-PHP:before:php8.3-opcache",
+        "PAIR-U24-PHP:before:php8.3-readline",
+        "PAIR-U24-PHP:before:php8.3-curl",
+        "PAIR-U24-PHP:before:php8.3-mbstring",
+        "PAIR-U24-PHP:before:php8.3-xml",
+        "PAIR-U24-PHP:before:php8.3-mysql"
+      ],
+      "captureDigest": "694eff65bc4f975ca132e5ea2c5aa1a6aafc391ac9495d425838ab34488a082a",
+      "reportDigest": "52421056635ce16430af623d25fa636a1781d85ce235cd148f68e7d2fdcf25c4",
+      "validationScanId": "vulnerability-scan_a546c4dfed58f60181bbe214fccad45a984a16e028bc2765c3c1b9014a93fd9f"
+    },
+    {
+      "id": "u24-php-after",
+      "role": "u24",
+      "status": "official",
+      "packages": [
+        {
+          "binaryName": "php8.3-cli",
+          "source": "php8.3",
+          "architecture": "amd64",
+          "version": "8.3.6-0ubuntu0.24.04.6",
+          "archiveSha256": "768f10e3c5c5e39eb63009e63996f070c01f285f95ae02016762d44ffc8f3ddd",
+          "archiveBytes": 1915986,
+          "releaseSha256": "61b9df2b13201cc8b3a725b84fd6e36c4777580c212384f6c9c20b2cb6f1a057",
+          "compressedIndexSha256": "04d3985fee4b3770d2f7324a28c9eccbdcdafc60ef4c5ae944ab61cd9de23867",
+          "sourceName": "php8.3",
+          "sourceVersion": "8.3.6-0ubuntu0.24.04.6",
+          "origin": "official",
+          "provenanceStatus": "verified",
+          "provenanceReasons": [],
+          "fileManifestSha256": "6beca4da3d12345e2e208cf1803099a45aac7192999a1b727a2196ebbd5f57d4",
+          "comparedFiles": 13
+        },
+        {
+          "binaryName": "php8.3-fpm",
+          "source": "php8.3",
+          "architecture": "amd64",
+          "version": "8.3.6-0ubuntu0.24.04.6",
+          "archiveSha256": "f55f797fd3deff03a78ade9e0f2e6e4534cc5d7b7d81c6a72aea8a9c1ed1094b",
+          "archiveBytes": 1924616,
+          "releaseSha256": "baeaf6c5b9edb0496b938d1b3d9724b95d1f60511bb0ee2668b21e556d26af1d",
+          "compressedIndexSha256": "93543838eb1c0c0c69b1e958fef583386600d6060194ac93e8995cc8577970a9",
+          "sourceName": "php8.3",
+          "sourceVersion": "8.3.6-0ubuntu0.24.04.6",
+          "origin": "official",
+          "provenanceStatus": "verified",
+          "provenanceReasons": [],
+          "fileManifestSha256": "4e568ac9a88a7ec64e6617162f726673b44acc28fafebf5aec00c2e04f5b6e99",
+          "comparedFiles": 16
+        },
+        {
+          "binaryName": "php8.3-common",
+          "source": "php8.3",
+          "architecture": "amd64",
+          "version": "8.3.6-0ubuntu0.24.04.6",
+          "archiveSha256": "3eb5eeaf3f99be4f63b57f881551c3d3c3a8d041145329f78902d030d3f9672a",
+          "archiveBytes": 740184,
+          "releaseSha256": "61b9df2b13201cc8b3a725b84fd6e36c4777580c212384f6c9c20b2cb6f1a057",
+          "compressedIndexSha256": "04d3985fee4b3770d2f7324a28c9eccbdcdafc60ef4c5ae944ab61cd9de23867",
+          "sourceName": "php8.3",
+          "sourceVersion": "8.3.6-0ubuntu0.24.04.6",
+          "origin": "official",
+          "provenanceStatus": "verified",
+          "provenanceReasons": [],
+          "fileManifestSha256": "dbbaedffe98bedbbf0654911f904e00cfba4290bb0edfd2a380a0d144fb152c9",
+          "comparedFiles": 48
+        },
+        {
+          "binaryName": "php8.3-opcache",
+          "source": "php8.3",
+          "architecture": "amd64",
+          "version": "8.3.6-0ubuntu0.24.04.6",
+          "archiveSha256": "d40016610112bdba6266ed1508a5443e083441f269214793636b45e9d0582362",
+          "archiveBytes": 371540,
+          "releaseSha256": "61b9df2b13201cc8b3a725b84fd6e36c4777580c212384f6c9c20b2cb6f1a057",
+          "compressedIndexSha256": "04d3985fee4b3770d2f7324a28c9eccbdcdafc60ef4c5ae944ab61cd9de23867",
+          "sourceName": "php8.3",
+          "sourceVersion": "8.3.6-0ubuntu0.24.04.6",
+          "origin": "official",
+          "provenanceStatus": "verified",
+          "provenanceReasons": [],
+          "fileManifestSha256": "e56fc64faa6a96e49320214cbb4ceb5086039c91e17b607dbcdbd2238923f6c8",
+          "comparedFiles": 6
+        },
+        {
+          "binaryName": "php8.3-readline",
+          "source": "php8.3",
+          "architecture": "amd64",
+          "version": "8.3.6-0ubuntu0.24.04.6",
+          "archiveSha256": "39efc0083d738c0537afcb1fdb55899e503d7028ac4a0943a7afe22feef7b68c",
+          "archiveBytes": 13448,
+          "releaseSha256": "61b9df2b13201cc8b3a725b84fd6e36c4777580c212384f6c9c20b2cb6f1a057",
+          "compressedIndexSha256": "04d3985fee4b3770d2f7324a28c9eccbdcdafc60ef4c5ae944ab61cd9de23867",
+          "sourceName": "php8.3",
+          "sourceVersion": "8.3.6-0ubuntu0.24.04.6",
+          "origin": "official",
+          "provenanceStatus": "verified",
+          "provenanceReasons": [],
+          "fileManifestSha256": "18b7737cdcd3d9e3630706e6622e68e8f2392af35ff42c4c53af8fef58cb29cf",
+          "comparedFiles": 6
+        },
+        {
+          "binaryName": "php8.3-curl",
+          "source": "php8.3",
+          "architecture": "amd64",
+          "version": "8.3.6-0ubuntu0.24.04.6",
+          "archiveSha256": "e5ea8a4e1fd5663d949964341cc9c222749e505aaae58cd8707cd4f1cfa9fb16",
+          "archiveBytes": 40304,
+          "releaseSha256": "61b9df2b13201cc8b3a725b84fd6e36c4777580c212384f6c9c20b2cb6f1a057",
+          "compressedIndexSha256": "04d3985fee4b3770d2f7324a28c9eccbdcdafc60ef4c5ae944ab61cd9de23867",
+          "sourceName": "php8.3",
+          "sourceVersion": "8.3.6-0ubuntu0.24.04.6",
+          "origin": "official",
+          "provenanceStatus": "verified",
+          "provenanceReasons": [],
+          "fileManifestSha256": "05c92d1f167eb684979f9f8aa0d2142d7e52098afa29feebe43b8a74d5abc609",
+          "comparedFiles": 6
+        },
+        {
+          "binaryName": "php8.3-mbstring",
+          "source": "php8.3",
+          "architecture": "amd64",
+          "version": "8.3.6-0ubuntu0.24.04.6",
+          "archiveSha256": "9ea73df3b6e9f01f8db5d94184672c245c4118fda229bed87ad16252fe5a64dc",
+          "archiveBytes": 511548,
+          "releaseSha256": "61b9df2b13201cc8b3a725b84fd6e36c4777580c212384f6c9c20b2cb6f1a057",
+          "compressedIndexSha256": "04d3985fee4b3770d2f7324a28c9eccbdcdafc60ef4c5ae944ab61cd9de23867",
+          "sourceName": "php8.3",
+          "sourceVersion": "8.3.6-0ubuntu0.24.04.6",
+          "origin": "official",
+          "provenanceStatus": "verified",
+          "provenanceReasons": [],
+          "fileManifestSha256": "3b8d6aa28e0514da561ce3eb38856b4b3a76ed32d4ac73e82b5424a9dcf568b2",
+          "comparedFiles": 6
+        },
+        {
+          "binaryName": "php8.3-xml",
+          "source": "php8.3",
+          "architecture": "amd64",
+          "version": "8.3.6-0ubuntu0.24.04.6",
+          "archiveSha256": "71104d769802bdb6065adb64c7a866326553e94e71d1b741ae5fe07c3b9dceba",
+          "archiveBytes": 126066,
+          "releaseSha256": "61b9df2b13201cc8b3a725b84fd6e36c4777580c212384f6c9c20b2cb6f1a057",
+          "compressedIndexSha256": "04d3985fee4b3770d2f7324a28c9eccbdcdafc60ef4c5ae944ab61cd9de23867",
+          "sourceName": "php8.3",
+          "sourceVersion": "8.3.6-0ubuntu0.24.04.6",
+          "origin": "official",
+          "provenanceStatus": "verified",
+          "provenanceReasons": [],
+          "fileManifestSha256": "85f34887fd72f37b5eefa3904f153d96978c77221d50492fd51d3e71beb35699",
+          "comparedFiles": 16
+        },
+        {
+          "binaryName": "php8.3-mysql",
+          "source": "php8.3",
+          "architecture": "amd64",
+          "version": "8.3.6-0ubuntu0.24.04.6",
+          "archiveSha256": "a17476662d75e08f3ef34fe3306143fe8b9e23e4058b06f6de82cab63ac5dbeb",
+          "archiveBytes": 127010,
+          "releaseSha256": "61b9df2b13201cc8b3a725b84fd6e36c4777580c212384f6c9c20b2cb6f1a057",
+          "compressedIndexSha256": "04d3985fee4b3770d2f7324a28c9eccbdcdafc60ef4c5ae944ab61cd9de23867",
+          "sourceName": "php8.3",
+          "sourceVersion": "8.3.6-0ubuntu0.24.04.6",
+          "origin": "official",
+          "provenanceStatus": "verified",
+          "provenanceReasons": [],
+          "fileManifestSha256": "9d8532cd3194d9eecefd68fb4fe011012317bd67eeaa080372605d48b4185877",
+          "comparedFiles": 10
+        }
+      ],
+      "pairEndpoints": [
+        "PAIR-U24-PHP:after:php8.3-cli",
+        "PAIR-U24-PHP:after:php8.3-fpm",
+        "PAIR-U24-PHP:after:php8.3-common",
+        "PAIR-U24-PHP:after:php8.3-opcache",
+        "PAIR-U24-PHP:after:php8.3-readline",
+        "PAIR-U24-PHP:after:php8.3-curl",
+        "PAIR-U24-PHP:after:php8.3-mbstring",
+        "PAIR-U24-PHP:after:php8.3-xml",
+        "PAIR-U24-PHP:after:php8.3-mysql"
+      ],
+      "captureDigest": "936c00aabbcfb0ea095fcf6b2d05376c8926ebc4bb7bc6da1aab9176f9b88923",
+      "reportDigest": "25a12e0614b090ce304679be5ebf3edba22d04cd0421e9da735280d96d82f6cd",
+      "validationScanId": "vulnerability-scan_2b80a3e28caf092fd4fe26d462ba151fc70870320ac9740e232b51edb3646930"
+    },
+    {
+      "id": "d13-php-before",
+      "role": "d13",
+      "status": "official",
+      "packages": [
+        {
+          "binaryName": "php8.4-cli",
+          "source": "php8.4",
+          "architecture": "amd64",
+          "version": "8.4.11-1",
+          "archiveSha256": "804ce65bb766e598b5d7199f680965bf6e598ce0668421a9d24e914d6dbfad30",
+          "archiveBytes": 1848760,
+          "releaseSha256": "a3f869d29c521a824ac8a9d7619b2539532af2d3ce5d5003c25e1df8f497bb23",
+          "compressedIndexSha256": "83b7feb4a963517002e20c497f3482f3e8f419b8b04598e89efdb9b58bafc6d5",
+          "sourceName": "php8.4",
+          "sourceVersion": "8.4.11-1",
+          "origin": "official",
+          "provenanceStatus": "verified",
+          "provenanceReasons": [],
+          "fileManifestSha256": "2146ea42bf8665b77cfc6e79e0b283871fecde9bcd00019dd703a1856378944f",
+          "comparedFiles": 13
+        },
+        {
+          "binaryName": "php8.4-fpm",
+          "source": "php8.4",
+          "architecture": "amd64",
+          "version": "8.4.11-1",
+          "archiveSha256": "f66c5f2cf81ec9cde9696b2a90784396f0da7748b9af852bc928e352008fa0ea",
+          "archiveBytes": 1859288,
+          "releaseSha256": "a3f869d29c521a824ac8a9d7619b2539532af2d3ce5d5003c25e1df8f497bb23",
+          "compressedIndexSha256": "83b7feb4a963517002e20c497f3482f3e8f419b8b04598e89efdb9b58bafc6d5",
+          "sourceName": "php8.4",
+          "sourceVersion": "8.4.11-1",
+          "origin": "official",
+          "provenanceStatus": "verified",
+          "provenanceReasons": [],
+          "fileManifestSha256": "11867047e897bf61190a3c564d31a20b178cff60d507d40a75936e75ac7bee90",
+          "comparedFiles": 16
+        },
+        {
+          "binaryName": "php8.4-common",
+          "source": "php8.4",
+          "architecture": "amd64",
+          "version": "8.4.11-1",
+          "archiveSha256": "4b781c4d9e276b067a2e058e3ad868e6562b1cb1ec1419b124aaee4bd245c6c7",
+          "archiveBytes": 761036,
+          "releaseSha256": "a3f869d29c521a824ac8a9d7619b2539532af2d3ce5d5003c25e1df8f497bb23",
+          "compressedIndexSha256": "83b7feb4a963517002e20c497f3482f3e8f419b8b04598e89efdb9b58bafc6d5",
+          "sourceName": "php8.4",
+          "sourceVersion": "8.4.11-1",
+          "origin": "official",
+          "provenanceStatus": "verified",
+          "provenanceReasons": [],
+          "fileManifestSha256": "5af75b3652c1365014fa7146c8200948c7b515982bd93300b4dd5f6ca65ceea6",
+          "comparedFiles": 49
+        },
+        {
+          "binaryName": "php8.4-opcache",
+          "source": "php8.4",
+          "architecture": "amd64",
+          "version": "8.4.11-1",
+          "archiveSha256": "4929c68b1daa6f22d9960b8a97bbbe7db35f9abb12d5ef97199391ef7c184101",
+          "archiveBytes": 453736,
+          "releaseSha256": "a3f869d29c521a824ac8a9d7619b2539532af2d3ce5d5003c25e1df8f497bb23",
+          "compressedIndexSha256": "83b7feb4a963517002e20c497f3482f3e8f419b8b04598e89efdb9b58bafc6d5",
+          "sourceName": "php8.4",
+          "sourceVersion": "8.4.11-1",
+          "origin": "official",
+          "provenanceStatus": "verified",
+          "provenanceReasons": [],
+          "fileManifestSha256": "4da18c92016865330b0e29864c39b825df67177756448f653d6df483a0105e5d",
+          "comparedFiles": 6
+        },
+        {
+          "binaryName": "php8.4-readline",
+          "source": "php8.4",
+          "architecture": "amd64",
+          "version": "8.4.11-1",
+          "archiveSha256": "a57865972cb682ff5025ef268dd6c92972b86d92e5e378a1ca21d342a322c011",
+          "archiveBytes": 12704,
+          "releaseSha256": "a3f869d29c521a824ac8a9d7619b2539532af2d3ce5d5003c25e1df8f497bb23",
+          "compressedIndexSha256": "83b7feb4a963517002e20c497f3482f3e8f419b8b04598e89efdb9b58bafc6d5",
+          "sourceName": "php8.4",
+          "sourceVersion": "8.4.11-1",
+          "origin": "official",
+          "provenanceStatus": "verified",
+          "provenanceReasons": [],
+          "fileManifestSha256": "148eb36ba100952820fe8ec353ef49687044ee9d7c4cf3b4f6f65596f8762ce5",
+          "comparedFiles": 6
+        },
+        {
+          "binaryName": "php8.4-curl",
+          "source": "php8.4",
+          "architecture": "amd64",
+          "version": "8.4.11-1",
+          "archiveSha256": "08da190e529eec9d60a623742dcc04e1d8d8f59da7933f89e2fbc03e748271a3",
+          "archiveBytes": 39768,
+          "releaseSha256": "a3f869d29c521a824ac8a9d7619b2539532af2d3ce5d5003c25e1df8f497bb23",
+          "compressedIndexSha256": "83b7feb4a963517002e20c497f3482f3e8f419b8b04598e89efdb9b58bafc6d5",
+          "sourceName": "php8.4",
+          "sourceVersion": "8.4.11-1",
+          "origin": "official",
+          "provenanceStatus": "verified",
+          "provenanceReasons": [],
+          "fileManifestSha256": "716410ca99b7d423657986e9ff607725ceb9e83d5fb3e177d47397f7e9a1af08",
+          "comparedFiles": 6
+        },
+        {
+          "binaryName": "php8.4-mbstring",
+          "source": "php8.4",
+          "architecture": "amd64",
+          "version": "8.4.11-1",
+          "archiveSha256": "ea3bd8ecee4b8e33ba90557cc63616d5b00e5f821e39d31c93e3bb46e6a7bed8",
+          "archiveBytes": 452240,
+          "releaseSha256": "a3f869d29c521a824ac8a9d7619b2539532af2d3ce5d5003c25e1df8f497bb23",
+          "compressedIndexSha256": "83b7feb4a963517002e20c497f3482f3e8f419b8b04598e89efdb9b58bafc6d5",
+          "sourceName": "php8.4",
+          "sourceVersion": "8.4.11-1",
+          "origin": "official",
+          "provenanceStatus": "verified",
+          "provenanceReasons": [],
+          "fileManifestSha256": "5b364b40a353af4d7882ffcc876cd997c80bf3093ba07f8f8f923a85579eb9f0",
+          "comparedFiles": 6
+        },
+        {
+          "binaryName": "php8.4-xml",
+          "source": "php8.4",
+          "architecture": "amd64",
+          "version": "8.4.11-1",
+          "archiveSha256": "a3f398a8016e5b99ac56c8b496602c39e27088c52a657c57863604a965a96dc0",
+          "archiveBytes": 677804,
+          "releaseSha256": "a3f869d29c521a824ac8a9d7619b2539532af2d3ce5d5003c25e1df8f497bb23",
+          "compressedIndexSha256": "83b7feb4a963517002e20c497f3482f3e8f419b8b04598e89efdb9b58bafc6d5",
+          "sourceName": "php8.4",
+          "sourceVersion": "8.4.11-1",
+          "origin": "official",
+          "provenanceStatus": "verified",
+          "provenanceReasons": [],
+          "fileManifestSha256": "8493378695d74f106abab9cecb4f63ebb1b6eb71ad8e6e5c1e4a0a2aadeebe0d",
+          "comparedFiles": 16
+        },
+        {
+          "binaryName": "php8.4-mysql",
+          "source": "php8.4",
+          "architecture": "amd64",
+          "version": "8.4.11-1",
+          "archiveSha256": "0b547ae0a8e94f4c7a9b277563e4ec598eb263b5a5d5babbaafc9b76fa5b8d5a",
+          "archiveBytes": 119660,
+          "releaseSha256": "a3f869d29c521a824ac8a9d7619b2539532af2d3ce5d5003c25e1df8f497bb23",
+          "compressedIndexSha256": "83b7feb4a963517002e20c497f3482f3e8f419b8b04598e89efdb9b58bafc6d5",
+          "sourceName": "php8.4",
+          "sourceVersion": "8.4.11-1",
+          "origin": "official",
+          "provenanceStatus": "verified",
+          "provenanceReasons": [],
+          "fileManifestSha256": "106311414c32f1aa8a0cc71f735972fbfdabe7955ac95159fa45dbd50f6d4d0b",
+          "comparedFiles": 10
+        }
+      ],
+      "pairEndpoints": [
+        "PAIR-D13-PHP:before:php8.4-cli",
+        "PAIR-D13-PHP:before:php8.4-fpm",
+        "PAIR-D13-PHP:before:php8.4-common",
+        "PAIR-D13-PHP:before:php8.4-opcache",
+        "PAIR-D13-PHP:before:php8.4-readline",
+        "PAIR-D13-PHP:before:php8.4-curl",
+        "PAIR-D13-PHP:before:php8.4-mbstring",
+        "PAIR-D13-PHP:before:php8.4-xml",
+        "PAIR-D13-PHP:before:php8.4-mysql"
+      ],
+      "captureDigest": "d0838fed955954e54c5558fdbcdb20f6c9a305a847304ceb2aa19897c308e788",
+      "reportDigest": "ee7f64fed446ef5f328046e7b1b2d5d78ae0d800721f13e8c18bbf338ba79663",
+      "validationScanId": "vulnerability-scan_d967e3ee7292136fcd9c112a3f880a7295d8bfa4ec95f1a6197387c499d92f13"
+    },
+    {
+      "id": "d13-php-after",
+      "role": "d13",
+      "status": "official",
+      "packages": [
+        {
+          "binaryName": "php8.4-cli",
+          "source": "php8.4",
+          "architecture": "amd64",
+          "version": "8.4.16-1~deb13u1",
+          "archiveSha256": "16180d6cd08c66b0660f08fa7f50962e0b215e52d92b0577f028736e540063b4",
+          "archiveBytes": 1852036,
+          "releaseSha256": "ae586c9b85f4250a56294a850fae4456e0e5cea9574482715c0e9dd2e2e6fc7f",
+          "compressedIndexSha256": "d627f6ec11cd1c6bb957d31334974b8fc6d6090907af79926c71ec1ff754adc7",
+          "sourceName": "php8.4",
+          "sourceVersion": "8.4.16-1~deb13u1",
+          "origin": "official",
+          "provenanceStatus": "verified",
+          "provenanceReasons": [],
+          "fileManifestSha256": "fd7bf99e60b48d2002014883f2b9cf3bb6b565260962aaa90b341a891db714e6",
+          "comparedFiles": 13
+        },
+        {
+          "binaryName": "php8.4-fpm",
+          "source": "php8.4",
+          "architecture": "amd64",
+          "version": "8.4.16-1~deb13u1",
+          "archiveSha256": "c358e49fc9eca881982ec542fc0948387d506efbf3c261993e35121be0a016b4",
+          "archiveBytes": 1861548,
+          "releaseSha256": "ae586c9b85f4250a56294a850fae4456e0e5cea9574482715c0e9dd2e2e6fc7f",
+          "compressedIndexSha256": "d627f6ec11cd1c6bb957d31334974b8fc6d6090907af79926c71ec1ff754adc7",
+          "sourceName": "php8.4",
+          "sourceVersion": "8.4.16-1~deb13u1",
+          "origin": "official",
+          "provenanceStatus": "verified",
+          "provenanceReasons": [],
+          "fileManifestSha256": "26e71249c7bbe5d8b5acecef8665ffc81d8700e3d94b2e0f3cd3ab5e0cc1a14b",
+          "comparedFiles": 16
+        },
+        {
+          "binaryName": "php8.4-common",
+          "source": "php8.4",
+          "architecture": "amd64",
+          "version": "8.4.16-1~deb13u1",
+          "archiveSha256": "322ce30d33e69a792c6a061d32d211346c71bec66cad1af6465cd4917ded4535",
+          "archiveBytes": 766972,
+          "releaseSha256": "ae586c9b85f4250a56294a850fae4456e0e5cea9574482715c0e9dd2e2e6fc7f",
+          "compressedIndexSha256": "d627f6ec11cd1c6bb957d31334974b8fc6d6090907af79926c71ec1ff754adc7",
+          "sourceName": "php8.4",
+          "sourceVersion": "8.4.16-1~deb13u1",
+          "origin": "official",
+          "provenanceStatus": "verified",
+          "provenanceReasons": [],
+          "fileManifestSha256": "d0ffe1d1bebf7dedcc154b9f04a5efd10b1f8a3e458685361d2598e77ecb70cd",
+          "comparedFiles": 49
+        },
+        {
+          "binaryName": "php8.4-opcache",
+          "source": "php8.4",
+          "architecture": "amd64",
+          "version": "8.4.16-1~deb13u1",
+          "archiveSha256": "e42263485924a9bd4ab32ec5fe92d10e9168f5eada623957495d2990f6a59444",
+          "archiveBytes": 458988,
+          "releaseSha256": "ae586c9b85f4250a56294a850fae4456e0e5cea9574482715c0e9dd2e2e6fc7f",
+          "compressedIndexSha256": "d627f6ec11cd1c6bb957d31334974b8fc6d6090907af79926c71ec1ff754adc7",
+          "sourceName": "php8.4",
+          "sourceVersion": "8.4.16-1~deb13u1",
+          "origin": "official",
+          "provenanceStatus": "verified",
+          "provenanceReasons": [],
+          "fileManifestSha256": "2f043b3904d66958fad6d4b1bfae0108b9ce48eba480fb5c739caca27d402a30",
+          "comparedFiles": 6
+        },
+        {
+          "binaryName": "php8.4-readline",
+          "source": "php8.4",
+          "architecture": "amd64",
+          "version": "8.4.16-1~deb13u1",
+          "archiveSha256": "613c5770f0452c512c412b0cc82c737cfcddd3f462d87956e02e64431669099b",
+          "archiveBytes": 12716,
+          "releaseSha256": "ae586c9b85f4250a56294a850fae4456e0e5cea9574482715c0e9dd2e2e6fc7f",
+          "compressedIndexSha256": "d627f6ec11cd1c6bb957d31334974b8fc6d6090907af79926c71ec1ff754adc7",
+          "sourceName": "php8.4",
+          "sourceVersion": "8.4.16-1~deb13u1",
+          "origin": "official",
+          "provenanceStatus": "verified",
+          "provenanceReasons": [],
+          "fileManifestSha256": "09956021ed9d58ba9a640764a730ce3ace690d3b3924e500415280a9fa58089a",
+          "comparedFiles": 6
+        },
+        {
+          "binaryName": "php8.4-curl",
+          "source": "php8.4",
+          "architecture": "amd64",
+          "version": "8.4.16-1~deb13u1",
+          "archiveSha256": "77b5a1b73c846281baf1ea8363f3060a11484abe7e6d1cb23eee55621a4efb70",
+          "archiveBytes": 39764,
+          "releaseSha256": "ae586c9b85f4250a56294a850fae4456e0e5cea9574482715c0e9dd2e2e6fc7f",
+          "compressedIndexSha256": "d627f6ec11cd1c6bb957d31334974b8fc6d6090907af79926c71ec1ff754adc7",
+          "sourceName": "php8.4",
+          "sourceVersion": "8.4.16-1~deb13u1",
+          "origin": "official",
+          "provenanceStatus": "verified",
+          "provenanceReasons": [],
+          "fileManifestSha256": "3427b3d85e3820fb85122d9ce903a7d742e83b51f9391ca09086e715177a98a1",
+          "comparedFiles": 6
+        },
+        {
+          "binaryName": "php8.4-mbstring",
+          "source": "php8.4",
+          "architecture": "amd64",
+          "version": "8.4.16-1~deb13u1",
+          "archiveSha256": "c213711cb1820d377336c6700676d651ddcc5828c63edb444f28e83dd2269fed",
+          "archiveBytes": 453452,
+          "releaseSha256": "ae586c9b85f4250a56294a850fae4456e0e5cea9574482715c0e9dd2e2e6fc7f",
+          "compressedIndexSha256": "d627f6ec11cd1c6bb957d31334974b8fc6d6090907af79926c71ec1ff754adc7",
+          "sourceName": "php8.4",
+          "sourceVersion": "8.4.16-1~deb13u1",
+          "origin": "official",
+          "provenanceStatus": "verified",
+          "provenanceReasons": [],
+          "fileManifestSha256": "cafcd2a8ed83f8309aa826b21c8e1bb029aac0b28aaeb4ef450103138f4e54b0",
+          "comparedFiles": 6
+        },
+        {
+          "binaryName": "php8.4-xml",
+          "source": "php8.4",
+          "architecture": "amd64",
+          "version": "8.4.16-1~deb13u1",
+          "archiveSha256": "2a3018ff963b9770a5c6c6388400b8ba1023b20bf13fe646935e9127ade4238b",
+          "archiveBytes": 543632,
+          "releaseSha256": "ae586c9b85f4250a56294a850fae4456e0e5cea9574482715c0e9dd2e2e6fc7f",
+          "compressedIndexSha256": "d627f6ec11cd1c6bb957d31334974b8fc6d6090907af79926c71ec1ff754adc7",
+          "sourceName": "php8.4",
+          "sourceVersion": "8.4.16-1~deb13u1",
+          "origin": "official",
+          "provenanceStatus": "verified",
+          "provenanceReasons": [],
+          "fileManifestSha256": "fab4fe2b11b98262bea9ea8cd5fec19575c89ab4f4a7ae67ec4a04b16283fb5e",
+          "comparedFiles": 16
+        },
+        {
+          "binaryName": "php8.4-mysql",
+          "source": "php8.4",
+          "architecture": "amd64",
+          "version": "8.4.16-1~deb13u1",
+          "archiveSha256": "7a0c1e0eccf7ac041cae5bdb6ac019b0b9d17e2e40c97c80dc5102f7b4593579",
+          "archiveBytes": 119672,
+          "releaseSha256": "ae586c9b85f4250a56294a850fae4456e0e5cea9574482715c0e9dd2e2e6fc7f",
+          "compressedIndexSha256": "d627f6ec11cd1c6bb957d31334974b8fc6d6090907af79926c71ec1ff754adc7",
+          "sourceName": "php8.4",
+          "sourceVersion": "8.4.16-1~deb13u1",
+          "origin": "official",
+          "provenanceStatus": "verified",
+          "provenanceReasons": [],
+          "fileManifestSha256": "a2ab73e8cfca3441556796d090c7ede06a6e0c4ac279d2c7512efa925d9d4b77",
+          "comparedFiles": 10
+        }
+      ],
+      "pairEndpoints": [
+        "PAIR-D13-PHP:after:php8.4-cli",
+        "PAIR-D13-PHP:after:php8.4-fpm",
+        "PAIR-D13-PHP:after:php8.4-common",
+        "PAIR-D13-PHP:after:php8.4-opcache",
+        "PAIR-D13-PHP:after:php8.4-readline",
+        "PAIR-D13-PHP:after:php8.4-curl",
+        "PAIR-D13-PHP:after:php8.4-mbstring",
+        "PAIR-D13-PHP:after:php8.4-xml",
+        "PAIR-D13-PHP:after:php8.4-mysql"
+      ],
+      "captureDigest": "dc1e1b93ca67c850fd07ddba0238535ab24548c339c57fed28242fe01d293f8f",
+      "reportDigest": "d8a89c8ffb5e699bd9e483f7b7c7dde571a06dc616b52e6fc5b8c0545cbd56c0",
+      "validationScanId": "vulnerability-scan_8e7d49468115ea813eb9cf3e7f9a952dc04c120d1a6b88106e6524712b852f24"
+    },
+    {
+      "id": "u24-apache-0",
+      "role": "u24",
+      "status": "official",
+      "packages": [
+        {
+          "binaryName": "apache2-bin",
+          "source": "apache2",
+          "architecture": "amd64",
+          "version": "2.4.58-1ubuntu8.8",
+          "archiveSha256": "76763f43c2c64cdf0969bef131fb986e510ffe7a5f4aeec80482c7736f61c353",
+          "archiveBytes": 1330732,
+          "releaseSha256": "9d9a3f50537156572b806b7395ce51b8df331a974c4293a301a937798405959a",
+          "compressedIndexSha256": "00b235f710d95ff6968a0e9b04c93d9e87c3ce4701cd6308aacaf30205d4490e",
+          "sourceName": "apache2",
+          "sourceVersion": "2.4.58-1ubuntu8.8",
+          "origin": "official",
+          "provenanceStatus": "verified",
+          "provenanceReasons": [],
+          "fileManifestSha256": "7dea2cca1549a7da95cf405f02576e5ab8ddb95e0699d89fd4e4d8f246ff5806",
+          "comparedFiles": 129
+        }
+      ],
+      "pairEndpoints": [
+        "PAIR-U24-APACHE:before:apache2-bin"
+      ],
+      "captureDigest": "76adb2c9f9ae1fc82e9d12e68e5089cf6cb47df117ff964e952ea7aaf8691486",
+      "reportDigest": "be92b3aea11082b274c604c2bd9fa859da65e43096623f48c71a952f91fc60a5",
+      "validationScanId": "vulnerability-scan_280acaea6a5f8b7df2d32f6a88b3b1d057459004f160beffed3f7367d51dbdda"
+    },
+    {
+      "id": "u24-apache-1",
+      "role": "u24",
+      "status": "official",
+      "packages": [
+        {
+          "binaryName": "apache2-bin",
+          "source": "apache2",
+          "architecture": "amd64",
+          "version": "2.4.58-1ubuntu8.11",
+          "archiveSha256": "7de984f32c245be6ea9ee19fcdd08cdce56c335aafcb33103e6a88b4c55639e9",
+          "archiveBytes": 1334868,
+          "releaseSha256": "61b9df2b13201cc8b3a725b84fd6e36c4777580c212384f6c9c20b2cb6f1a057",
+          "compressedIndexSha256": "04d3985fee4b3770d2f7324a28c9eccbdcdafc60ef4c5ae944ab61cd9de23867",
+          "sourceName": "apache2",
+          "sourceVersion": "2.4.58-1ubuntu8.11",
+          "origin": "official",
+          "provenanceStatus": "verified",
+          "provenanceReasons": [],
+          "fileManifestSha256": "5a372f40011ef1300098d548199bf6f94fedb6a95a33f222f83b90f57df3191e",
+          "comparedFiles": 129
+        }
+      ],
+      "pairEndpoints": [
+        "PAIR-U24-APACHE:after:apache2-bin",
+        "PAIR-U24-APACHE-HTTP:before:apache2-bin"
+      ],
+      "captureDigest": "23f24a82e62fac4a6cc8b2bd4fabe68ca4806725121b7664475ede0cc2779423",
+      "reportDigest": "474b64511ccfbc7166f845af8e694df4e10ecef9c45d6307f48a1a91f777715e",
+      "validationScanId": "vulnerability-scan_6ecd8547a0977d182bbaa41c3d5cf8361c4fc0b68f16f51bde6ed4b42cd80839"
+    },
+    {
+      "id": "u24-apache-2",
+      "role": "u24",
+      "status": "official",
+      "packages": [
+        {
+          "binaryName": "apache2-bin",
+          "source": "apache2",
+          "architecture": "amd64",
+          "version": "2.4.58-1ubuntu8.12",
+          "archiveSha256": "431eb3e7d7f19960a910381f47aa1d833f10b530edcefb3c3d252e769ec11c2c",
+          "archiveBytes": 1336056,
+          "releaseSha256": "acd8860b1faee76c30f2352ec4ce02a8eda916357d4368caa745e749a0f7c8cd",
+          "compressedIndexSha256": "77c70b937aba7dcc4a4ede39d216ae5677f1b91cfb5214788f6892abd0b99e9f",
+          "sourceName": "apache2",
+          "sourceVersion": "2.4.58-1ubuntu8.12",
+          "origin": "official",
+          "provenanceStatus": "verified",
+          "provenanceReasons": [],
+          "fileManifestSha256": "a7570fc1c1195018e1e02ce0a9e0b267063151d740b08a16e37a01355f7f9cf0",
+          "comparedFiles": 129
+        }
+      ],
+      "pairEndpoints": [
+        "PAIR-U24-APACHE-HTTP:after:apache2-bin"
+      ],
+      "captureDigest": "7b0983fd750e68eb9da5de7440976262f66dc95cae67411ae8e7a157bb63800a",
+      "reportDigest": "29da4aedb98962356f5396693ea3db0049782ee48e60fa99f7aef4399ddfbcf6",
+      "validationScanId": "vulnerability-scan_c93078dc69a04d039bafb1cd8051fa57211bc67d1027393f10e22aa784552da6"
+    },
+    {
+      "id": "d13-apache-0",
+      "role": "d13",
+      "status": "official",
+      "packages": [
+        {
+          "binaryName": "apache2-bin",
+          "source": "apache2",
+          "architecture": "amd64",
+          "version": "2.4.65-2",
+          "archiveSha256": "2f4782e1630de93a7a690736800e6894b7400c0fa4e1276d1f83c1ce08c0c5db",
+          "archiveBytes": 1405048,
+          "releaseSha256": "a3f869d29c521a824ac8a9d7619b2539532af2d3ce5d5003c25e1df8f497bb23",
+          "compressedIndexSha256": "83b7feb4a963517002e20c497f3482f3e8f419b8b04598e89efdb9b58bafc6d5",
+          "sourceName": "apache2",
+          "sourceVersion": "2.4.65-2",
+          "origin": "official",
+          "provenanceStatus": "verified",
+          "provenanceReasons": [],
+          "fileManifestSha256": "aeefc15586790e73b0deb6ea33a566bd039e5ad073b82ba1644674b3c7cab65e",
+          "comparedFiles": 129
+        }
+      ],
+      "pairEndpoints": [
+        "PAIR-D13-APACHE:before:apache2-bin"
+      ],
+      "captureDigest": "6d990046cace32a4b203adb1844240216df7085779b7799033b46327a2cdeea3",
+      "reportDigest": "632250c59e5d14dca10bd6ccf20183557a4d5fac70803c9f5c922624a6997d2b",
+      "validationScanId": "vulnerability-scan_f754d3c22c5c15c63fcd970110aedc13f90be60db84770384f3fa3c757b32ed9"
+    },
+    {
+      "id": "d13-apache-1",
+      "role": "d13",
+      "status": "official",
+      "packages": [
+        {
+          "binaryName": "apache2-bin",
+          "source": "apache2",
+          "architecture": "amd64",
+          "version": "2.4.66-1~deb13u1",
+          "archiveSha256": "28865e7f4f6d6bd4e2c67447cdb5d40fcbcb8ba20407e0b8fd8dbf3bbb1972b1",
+          "archiveBytes": 1409348,
+          "releaseSha256": "59bcb7bc2e221c6e7d2361adf8f82dfbd28ad8d755f2fe42f56d3be42fd25a4c",
+          "compressedIndexSha256": "d103f0fd4603869384a7486be3682dd00de0ac665b86a44c3b550ad21306d23d",
+          "sourceName": "apache2",
+          "sourceVersion": "2.4.66-1~deb13u1",
+          "origin": "official",
+          "provenanceStatus": "verified",
+          "provenanceReasons": [],
+          "fileManifestSha256": "f656abae4a395179b8ffaf291c29d58bb158e479d16be1b2229beef133d6b121",
+          "comparedFiles": 129
+        }
+      ],
+      "pairEndpoints": [
+        "PAIR-D13-APACHE:after:apache2-bin",
+        "PAIR-D13-APACHE-HTTP:before:apache2-bin"
+      ],
+      "captureDigest": "c1872a9a4ae379fe078d276e1d2219c3bcf0841531b83eb974c4618e4ec4fb9f",
+      "reportDigest": "d0dc74423c5c34e36adc1a0816b9c217e05045d4e095ca19eb2b26b3984e60d7",
+      "validationScanId": "vulnerability-scan_a3609ba8ebdd3a39eb362d4afafb286f76ec2fca0b1a8bb24af249ba9f31d05e"
+    },
+    {
+      "id": "d13-apache-2",
+      "role": "d13",
+      "status": "official",
+      "packages": [
+        {
+          "binaryName": "apache2-bin",
+          "source": "apache2",
+          "architecture": "amd64",
+          "version": "2.4.67-1~deb13u2",
+          "archiveSha256": "77e30e38d93c31d8d55d8d7925bd4f28c87484c0ad7046d126043edbbfdc5454",
+          "archiveBytes": 1411096,
+          "releaseSha256": "859387b05d421342aaf728af21a155afdb7b4e20c700835497a138bc420fc709",
+          "compressedIndexSha256": "4884173f59d821cd727a025f5fe6026c1222e8a5a41364047052554f5b96547e",
+          "sourceName": "apache2",
+          "sourceVersion": "2.4.67-1~deb13u2",
+          "origin": "official",
+          "provenanceStatus": "verified",
+          "provenanceReasons": [],
+          "fileManifestSha256": "9effb70665eff4dff4e4041b6f569fa2b34791cda2f5666e729237e78d66e0c5",
+          "comparedFiles": 129
+        }
+      ],
+      "pairEndpoints": [
+        "PAIR-D13-APACHE-HTTP:after:apache2-bin"
+      ],
+      "captureDigest": "a058ff0afa6d6966e95017741e6420524d28169b5778de00c161ef85aad266df",
+      "reportDigest": "95b4e543eed5abdfcd9aa6a1dc9a7ff6b4fcec5867ee0465bd8caeaa407985ee",
+      "validationScanId": "vulnerability-scan_7ddc52fa0f8b9ebbd3bfde2bfe50122b94120d7a3bb973eccbeeffe89d3de090"
+    },
+    {
+      "id": "u24-nginx-0",
+      "role": "u24",
+      "status": "official",
+      "packages": [
+        {
+          "binaryName": "nginx",
+          "source": "nginx",
+          "architecture": "amd64",
+          "version": "1.24.0-2ubuntu7.5",
+          "archiveSha256": "aed57674bbd4c4f94864e0ded617599dbff530e399b803db595ffe424ff5757a",
+          "archiveBytes": 520182,
+          "releaseSha256": "9d9a3f50537156572b806b7395ce51b8df331a974c4293a301a937798405959a",
+          "compressedIndexSha256": "00b235f710d95ff6968a0e9b04c93d9e87c3ce4701cd6308aacaf30205d4490e",
+          "sourceName": "nginx",
+          "sourceVersion": "1.24.0-2ubuntu7.5",
+          "origin": "official",
+          "provenanceStatus": "verified",
+          "provenanceReasons": [],
+          "fileManifestSha256": "4bb30eb023607c4b73f59206e15f6b34bfc254399f19cd06eb7cdb1aadeab1e0",
+          "comparedFiles": 4
+        }
+      ],
+      "pairEndpoints": [
+        "PAIR-U24-NGINX:before:nginx"
+      ],
+      "captureDigest": "df1791d92d570c8d7c0602bb9713706a34b6c08c18c10339d0ace1211b399b7c",
+      "reportDigest": "8c43186215d18960fb819685e2aa37ef54ec2bf7a4a4b092939b5a7461e2fee6",
+      "validationScanId": "vulnerability-scan_c8d76fe7ffa22db5aa541681ade241ff86920ee5edb7284d4088d7b11757120e"
+    },
+    {
+      "id": "u24-nginx-1",
+      "role": "u24",
+      "status": "official",
+      "packages": [
+        {
+          "binaryName": "nginx",
+          "source": "nginx",
+          "architecture": "amd64",
+          "version": "1.24.0-2ubuntu7.6",
+          "archiveSha256": "1359c71f19cb114fe99b893f57485aa1c9faaddce8d57193fdd72bd01e92d690",
+          "archiveBytes": 521146,
+          "releaseSha256": "61b9df2b13201cc8b3a725b84fd6e36c4777580c212384f6c9c20b2cb6f1a057",
+          "compressedIndexSha256": "04d3985fee4b3770d2f7324a28c9eccbdcdafc60ef4c5ae944ab61cd9de23867",
+          "sourceName": "nginx",
+          "sourceVersion": "1.24.0-2ubuntu7.6",
+          "origin": "official",
+          "provenanceStatus": "verified",
+          "provenanceReasons": [],
+          "fileManifestSha256": "b7ce641039f95c0c3927f7ee519ad793246795ab9f0122a7f7a0f601c7807559",
+          "comparedFiles": 4
+        }
+      ],
+      "pairEndpoints": [
+        "PAIR-U24-NGINX:after:nginx"
+      ],
+      "captureDigest": "3c02e14966c51d0c722f4d03c7683056664736a432d3123e9abe9e6882779af8",
+      "reportDigest": "5882fd6f5e7f880d2f66f63911ec80a1eefba50b250d72cdb8e75295641c4ddd",
+      "validationScanId": "vulnerability-scan_4fd59095ee29120e247b248ae8e8630d75c70b97a613c08ee31d9cbcb78f7dd9"
+    },
+    {
+      "id": "d13-nginx-0",
+      "role": "d13",
+      "status": "official",
+      "packages": [
+        {
+          "binaryName": "nginx",
+          "source": "nginx",
+          "architecture": "amd64",
+          "version": "1.26.3-3+deb13u1",
+          "archiveSha256": "8a2fceeeb4ad7d0620097fe0fc007ddb4d3e399e92ec3f256c6d72943f15a899",
+          "archiveBytes": 608724,
+          "releaseSha256": "a3f869d29c521a824ac8a9d7619b2539532af2d3ce5d5003c25e1df8f497bb23",
+          "compressedIndexSha256": "83b7feb4a963517002e20c497f3482f3e8f419b8b04598e89efdb9b58bafc6d5",
+          "sourceName": "nginx",
+          "sourceVersion": "1.26.3-3+deb13u1",
+          "origin": "official",
+          "provenanceStatus": "verified",
+          "provenanceReasons": [],
+          "fileManifestSha256": "430b92cfb8cbbad19ca4c858d67a8f080125d46ba19db2af5333110a4599d0d5",
+          "comparedFiles": 5
+        }
+      ],
+      "pairEndpoints": [
+        "PAIR-D13-NGINX:before:nginx"
+      ],
+      "captureDigest": "db0442448e118692f5af8a0cf77c34f9f02705da2c352aab80f51d0ac646e51e",
+      "reportDigest": "0d8a4ea6ebc6e3add3415e369300fb188ea905480803831d6fd553aa0dc67c52",
+      "validationScanId": "vulnerability-scan_ef39496fd4228693b2d24a5751d48d2a7fbc7b195c54727dc099310d9de9d6cd"
+    },
+    {
+      "id": "d13-nginx-1",
+      "role": "d13",
+      "status": "official",
+      "packages": [
+        {
+          "binaryName": "nginx",
+          "source": "nginx",
+          "architecture": "amd64",
+          "version": "1.26.3-3+deb13u2",
+          "archiveSha256": "98bb3ea66b28b8c8269a3acd4358a718349d79bb122adaabf45752954b7910d6",
+          "archiveBytes": 609272,
+          "releaseSha256": "ae586c9b85f4250a56294a850fae4456e0e5cea9574482715c0e9dd2e2e6fc7f",
+          "compressedIndexSha256": "d627f6ec11cd1c6bb957d31334974b8fc6d6090907af79926c71ec1ff754adc7",
+          "sourceName": "nginx",
+          "sourceVersion": "1.26.3-3+deb13u2",
+          "origin": "official",
+          "provenanceStatus": "verified",
+          "provenanceReasons": [],
+          "fileManifestSha256": "ce6237bdffbecfa10f726b5f6f027cf72c74a57f1d19ac9ae8cbdd755a31beb3",
+          "comparedFiles": 5
+        }
+      ],
+      "pairEndpoints": [
+        "PAIR-D13-NGINX:after:nginx"
+      ],
+      "captureDigest": "9ca67be0784daf4ff238707861337791baddab9607c3c657f98e3488a033f699",
+      "reportDigest": "d28ee64b26245622c4472798ecb8b8b7e7263819443f1b6644337daea53105cd",
+      "validationScanId": "vulnerability-scan_75b7a815a5cf925d3aefdf0677db8a2bf2b7bc762ba8371399a2ef025f6bdb2c"
+    },
+    {
+      "id": "u24-missing-archive",
+      "role": "u24",
+      "status": "unknown",
+      "packages": [
+        {
+          "binaryName": "nginx",
+          "source": "nginx",
+          "architecture": "amd64",
+          "version": "1.24.0-2ubuntu7.5",
+          "archiveSha256": "aed57674bbd4c4f94864e0ded617599dbff530e399b803db595ffe424ff5757a",
+          "archiveBytes": 520182,
+          "releaseSha256": "9d9a3f50537156572b806b7395ce51b8df331a974c4293a301a937798405959a",
+          "compressedIndexSha256": "00b235f710d95ff6968a0e9b04c93d9e87c3ce4701cd6308aacaf30205d4490e",
+          "sourceName": "nginx",
+          "sourceVersion": "1.24.0-2ubuntu7.5",
+          "origin": "unknown",
+          "provenanceStatus": "unknown",
+          "provenanceReasons": [
+            "cached_archive_unavailable"
+          ],
+          "fileManifestSha256": null,
+          "comparedFiles": 0
+        }
+      ],
+      "pairEndpoints": [
+        "PAIR-U24-NGINX:before:nginx"
+      ],
+      "captureDigest": "204c7bfbaf06895d2c5f03fd55cd246906b13be3a79853d561ce05b918539258",
+      "reportDigest": "f20cb6d6262cd4c70bbe6c6f1a07308b28cc3a2720b1c1bc67b236e3f590f79b",
+      "validationScanId": "vulnerability-scan_00162ea5b55e7784e5c681640d783628710dd2a933076fdba713482edb51bb23"
+    },
+    {
+      "id": "u24-modified-file",
+      "role": "u24",
+      "status": "unknown",
+      "packages": [
+        {
+          "binaryName": "nginx",
+          "source": "nginx",
+          "architecture": "amd64",
+          "version": "1.24.0-2ubuntu7.5",
+          "archiveSha256": "aed57674bbd4c4f94864e0ded617599dbff530e399b803db595ffe424ff5757a",
+          "archiveBytes": 520182,
+          "releaseSha256": "9d9a3f50537156572b806b7395ce51b8df331a974c4293a301a937798405959a",
+          "compressedIndexSha256": "00b235f710d95ff6968a0e9b04c93d9e87c3ce4701cd6308aacaf30205d4490e",
+          "sourceName": "nginx",
+          "sourceVersion": "1.24.0-2ubuntu7.5",
+          "origin": "unknown",
+          "provenanceStatus": "unknown",
+          "provenanceReasons": [
+            "installed_file_mismatch"
+          ],
+          "fileManifestSha256": null,
+          "comparedFiles": 0
+        }
+      ],
+      "pairEndpoints": [
+        "PAIR-U24-NGINX:before:nginx"
+      ],
+      "captureDigest": "7d8568ae8f370ef2fae40db049c0b04327f0a81f38d9fc333d3a8a3ebb4bac23",
+      "reportDigest": "e1f4eb9dc2c0692afb5f5d9ccea7313a0a9a82c8c2c0f9bdf4bebbc37bee519f",
+      "validationScanId": "vulnerability-scan_5877bc17585af3b924bad3f327438c947d4b4577a1df6fe8d05c1f2edfaeb908"
+    },
+    {
+      "id": "u24-signed-body-tamper",
+      "role": "u24",
+      "status": "unknown",
+      "packages": [
+        {
+          "binaryName": "nginx",
+          "source": "nginx",
+          "architecture": "amd64",
+          "version": "1.24.0-2ubuntu7.5",
+          "archiveSha256": "aed57674bbd4c4f94864e0ded617599dbff530e399b803db595ffe424ff5757a",
+          "archiveBytes": 520182,
+          "releaseSha256": "9d9a3f50537156572b806b7395ce51b8df331a974c4293a301a937798405959a",
+          "compressedIndexSha256": "00b235f710d95ff6968a0e9b04c93d9e87c3ce4701cd6308aacaf30205d4490e",
+          "sourceName": "nginx",
+          "sourceVersion": "1.24.0-2ubuntu7.5",
+          "origin": "unknown",
+          "provenanceStatus": "unknown",
+          "provenanceReasons": [
+            "authenticated_cache_unavailable"
+          ],
+          "fileManifestSha256": null,
+          "comparedFiles": 0
+        }
+      ],
+      "pairEndpoints": [
+        "PAIR-U24-NGINX:before:nginx"
+      ],
+      "captureDigest": "59d20643250e5c416792e2430ed6aad221d42e4f4480ee0b6fc3a4bf06b7e74d",
+      "reportDigest": "efa607c84d02a01513edeb17e0b47d42889960b34e1ecae5234a32986533f367",
+      "validationScanId": "vulnerability-scan_74e13bb9e898019db2edae2e0752c7fc6bec5efe115112e529f318bb64996510"
+    },
+    {
+      "id": "d13-missing-archive",
+      "role": "d13",
+      "status": "unknown",
+      "packages": [
+        {
+          "binaryName": "nginx",
+          "source": "nginx",
+          "architecture": "amd64",
+          "version": "1.26.3-3+deb13u1",
+          "archiveSha256": "8a2fceeeb4ad7d0620097fe0fc007ddb4d3e399e92ec3f256c6d72943f15a899",
+          "archiveBytes": 608724,
+          "releaseSha256": "a3f869d29c521a824ac8a9d7619b2539532af2d3ce5d5003c25e1df8f497bb23",
+          "compressedIndexSha256": "83b7feb4a963517002e20c497f3482f3e8f419b8b04598e89efdb9b58bafc6d5",
+          "sourceName": "nginx",
+          "sourceVersion": "1.26.3-3+deb13u1",
+          "origin": "unknown",
+          "provenanceStatus": "unknown",
+          "provenanceReasons": [
+            "cached_archive_unavailable"
+          ],
+          "fileManifestSha256": null,
+          "comparedFiles": 0
+        }
+      ],
+      "pairEndpoints": [
+        "PAIR-D13-NGINX:before:nginx"
+      ],
+      "captureDigest": "30ea6ef7b047bc24977ea92d8f2c689bc3e50584ab0a410112b5a07ddfa01ea6",
+      "reportDigest": "8fa628e499341f99ad29fffe9cc75a575c867c58d74af8592da6d8a9a0b99233",
+      "validationScanId": "vulnerability-scan_1a20878d557a772b779818844fc0e0a5765ec7d3386adf32c9ad95b2ba080d9a"
+    },
+    {
+      "id": "d13-modified-file",
+      "role": "d13",
+      "status": "unknown",
+      "packages": [
+        {
+          "binaryName": "nginx",
+          "source": "nginx",
+          "architecture": "amd64",
+          "version": "1.26.3-3+deb13u1",
+          "archiveSha256": "8a2fceeeb4ad7d0620097fe0fc007ddb4d3e399e92ec3f256c6d72943f15a899",
+          "archiveBytes": 608724,
+          "releaseSha256": "a3f869d29c521a824ac8a9d7619b2539532af2d3ce5d5003c25e1df8f497bb23",
+          "compressedIndexSha256": "83b7feb4a963517002e20c497f3482f3e8f419b8b04598e89efdb9b58bafc6d5",
+          "sourceName": "nginx",
+          "sourceVersion": "1.26.3-3+deb13u1",
+          "origin": "unknown",
+          "provenanceStatus": "unknown",
+          "provenanceReasons": [
+            "installed_file_mismatch"
+          ],
+          "fileManifestSha256": null,
+          "comparedFiles": 0
+        }
+      ],
+      "pairEndpoints": [
+        "PAIR-D13-NGINX:before:nginx"
+      ],
+      "captureDigest": "4478348d5bef9a5db6080635135b8b669d132e385bf9de009d1dfaea86390dc5",
+      "reportDigest": "18af2cc9a80377aa8732965370f2a72ccc009d6611802c92225398273ce43c0e",
+      "validationScanId": "vulnerability-scan_c17650cb3934881b1b4e4565329725985cb59c5cb3e7a7a701d4100106ce1788"
+    },
+    {
+      "id": "d13-signed-body-tamper",
+      "role": "d13",
+      "status": "unknown",
+      "packages": [
+        {
+          "binaryName": "nginx",
+          "source": "nginx",
+          "architecture": "amd64",
+          "version": "1.26.3-3+deb13u1",
+          "archiveSha256": "8a2fceeeb4ad7d0620097fe0fc007ddb4d3e399e92ec3f256c6d72943f15a899",
+          "archiveBytes": 608724,
+          "releaseSha256": "a3f869d29c521a824ac8a9d7619b2539532af2d3ce5d5003c25e1df8f497bb23",
+          "compressedIndexSha256": "83b7feb4a963517002e20c497f3482f3e8f419b8b04598e89efdb9b58bafc6d5",
+          "sourceName": "nginx",
+          "sourceVersion": "1.26.3-3+deb13u1",
+          "origin": "unknown",
+          "provenanceStatus": "unknown",
+          "provenanceReasons": [
+            "authenticated_cache_unavailable"
+          ],
+          "fileManifestSha256": null,
+          "comparedFiles": 0
+        }
+      ],
+      "pairEndpoints": [
+        "PAIR-D13-NGINX:before:nginx"
+      ],
+      "captureDigest": "8de1795b1718c431a1521faceeab5a03c98b6a106472ba0bf63e609e93cf9482",
+      "reportDigest": "cf81a547c7aecf606f538bf54328a808862470c28099d9304167fbddfc4bd6c3",
+      "validationScanId": "vulnerability-scan_9749cd5e17f41907696fd8dd84b9e726ffef721a43c5b7514ea4a5afcdb21fa7"
+    }
+  ]
+}

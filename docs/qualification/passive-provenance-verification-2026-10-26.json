@@ -1,0 +1,84 @@
+{
+  "schemaVersion": "1",
+  "verifiedAt": "2026-10-25T23:57:50.767383Z",
+  "toolchain": "go1.22.12",
+  "sourceManifestSha256": "cafaab3eb195918629022e7472d36ef4362904edeea6a06d01b867f2f0fb74ef",
+  "nativeTestBinarySha256": "b09ca758231ade1a338da772c3fca792238e0169bd55b7d923a31d058438fc73",
+  "fullPipeline": {
+    "passed": 21,
+    "failed": 0,
+    "skipped": 0,
+    "durationMs": 84204.75375,
+    "positiveCaptures": 14,
+    "uniquePublishedArchives": 46,
+    "unknownNegativeCaptures": 6,
+    "realDebianPublisherPolicyCases": 9,
+    "corePairs": 8,
+    "corePairEndpoints": 16,
+    "additionalPhpArchives": 32,
+    "receiptSha256": "b872e839aa5defd0e0ce0a041f5a9c1cc011464e631d879a42ee1dcbfe8e062f",
+    "backendRuntimeBinding": "Initial loaded-backend pass; no pre-spawn/post-exit backend source hash was recorded. A frozen-tree rerun is required before current integrated backend qualification."
+  },
+  "fullUnitSuite": {
+    "platform": "linux/arm64",
+    "CGO_ENABLED": "0",
+    "testPackages": 11,
+    "packagesWithoutTestsBuilt": 8,
+    "topLevelPass": 169,
+    "topLevelSkipped": 11,
+    "parentAndSubtestPass": 302,
+    "failed": 0,
+    "skipScope": "Ten pre-existing opt-in migration/systemd tests plus the separately executed opt-in native corpus test."
+  },
+  "race": {
+    "platform": "linux/arm64",
+    "CGO_ENABLED": "1",
+    "packages": [
+      "internal/vulnerability",
+      "internal/api",
+      "internal/config"
+    ],
+    "passed": 3,
+    "failed": 0,
+    "image": "golang@sha256:3d699e4d15d0f8f13c9195c0632a16702b8cbdece2955af1c23b37ae5d55a253",
+    "network": "none",
+    "cpuLimit": 1,
+    "memoryLimitBytes": 536870912
+  },
+  "vet": {
+    "GOOS": "linux",
+    "GOARCH": "amd64",
+    "CGO_ENABLED": "0",
+    "scope": "./...",
+    "passed": true
+  },
+  "build": {
+    "GOOS": "linux",
+    "GOARCH": "amd64",
+    "CGO_ENABLED": "0",
+    "sha256": "22bf7ca3669e1d9ba9bafe0237d2a23faeec2af992929edb14cc166d4d3e6b25",
+    "released": false
+  },
+  "fuzz": {
+    "target": "FuzzCleartextFramingIsBoundedAndNeverPanics",
+    "platform": "darwin/arm64",
+    "durationSeconds": 2,
+    "executions": 117018,
+    "passed": true
+  },
+  "nonQualifyingAttempts": [
+    {
+      "platform": "linux/amd64 user-mode emulation",
+      "result": "Unrelated existing secure_cleanup openat2 returned ENOSYS; this attempt is not counted as a full unit pass."
+    },
+    {
+      "platform": "darwin/arm64 Go1.22.12",
+      "result": "API/config race binaries hit the macOS missing LC_UUID loader error; replaced by native Linux arm64 race checks."
+    },
+    {
+      "platform": "linux/arm64 initial restricted fixture",
+      "result": "Two existing version-probe tests could not execute synthetic scripts on noexec /tmp; explicit exec on the disposable tmpfs fixed the fixture and the complete suite passed."
+    }
+  ],
+  "boundary": "Source and local qualification only; no merged/released/deployed agent artifact, production enrollment, host package mutation, or production proof."
+}

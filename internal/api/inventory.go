@@ -15,7 +15,11 @@ import (
 // routes, raw commands or response bodies in errors/logs.
 func (c *Client) inventoryJSON(ctx context.Context, route string, input any, output any) error {
 	encoded, e := json.Marshal(input)
-	if e != nil || len(encoded) > vulnerability.MaxPageBytes {
+	limit := vulnerability.MaxPageBytes
+	if completion, ok := input.(vulnerability.Completion); ok && route == "monitor-agent-inventory-complete" && completion.Capture.Collector.Version == vulnerability.ProvenanceCollectorVersion {
+		limit = vulnerability.MaxProvenanceCompletionBytes
+	}
+	if e != nil || len(encoded) > limit {
 		return errors.New("inventory request budget exceeded")
 	}
 	endpoint := c.endpoint(route)
