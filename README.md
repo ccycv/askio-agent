@@ -98,3 +98,4 @@ Start here:
 - **Resource telemetry / heartbeat schema**: `docs/RESOURCES.md`
 - **Remediation playbooks**: `docs/PLAYBOOKS.md`
 - **Security**: `docs/SECURITY.md`
+- **Passive vulnerability inventory** (default off): `docs/PASSIVE_INVENTORY.md`

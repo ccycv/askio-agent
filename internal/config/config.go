@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -95,6 +96,10 @@ func migrationAllowedRootsAreCanonical(roots []string) bool {
 	return true
 }
 
+type InventoryConfig struct {
+	Enabled bool `yaml:"enabled"`
+}
+
 type Config struct {
 	Mode                         string        `yaml:"mode"`
 	APIURL                       string        `yaml:"api_url"`
@@ -115,6 +120,8 @@ type Config struct {
 	Operations *OperationsConfig `yaml:"operations,omitempty"`
 
 	Migration *MigrationConfig `yaml:"migration,omitempty"`
+
+	Inventory *InventoryConfig `yaml:"inventory,omitempty"`
 
 	Gateway *GatewayConfig `yaml:"gateway,omitempty"`
 }
@@ -210,6 +217,15 @@ func (c Config) Normalized() (Config, error) {
 		return Config{}, fmt.Errorf("invalid mode: %q", out.Mode)
 	}
 
+	if out.Inventory != nil && out.Inventory.Enabled {
+		endpoint, e := url.Parse(out.APIURL)
+		if e != nil || endpoint.Scheme != "https" || endpoint.Host == "" || endpoint.User != nil || endpoint.RawQuery != "" || endpoint.Fragment != "" {
+			return Config{}, fmt.Errorf("passive inventory requires a fixed HTTPS API endpoint")
+		}
+	}
+	if out.Inventory != nil && out.Inventory.Enabled && (out.Mode != "host" || out.TLSSkipVerify) {
+		return Config{}, fmt.Errorf("passive inventory requires direct host mode and verified TLS")
+	}
 	if out.Mode == "gateway" {
 		if out.Gateway == nil {
 			return Config{}, fmt.Errorf("gateway config is required when mode=gateway")
