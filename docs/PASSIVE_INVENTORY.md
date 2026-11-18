@@ -15,7 +15,7 @@ inventory:
   enabled: true
 ```
 
-The collector requires direct `host` mode and a fixed HTTPS API URL with verified TLS. `tls_skip_verify`, gateway mode, URL credentials and query/fragment overrides are rejected for this capability. The backend must independently enable its feature and enroll the current agent. Neither remote monitor config nor a generic task can enable this loop. With the local option absent or false, no inventory polling or collection occurs.
+Enrollment gating, its tests and the first-host checklist are in [ENROLLMENT.md](ENROLLMENT.md). The collector requires direct `host` mode and a fixed HTTPS API URL with verified TLS. `tls_skip_verify`, gateway mode, URL credentials and query/fragment overrides are rejected for this capability. The backend must independently enable its feature and enroll the current agent. Neither remote monitor config nor a generic task can enable this loop. With the local option absent or false, no inventory polling or collection occurs.
 
 ## Protocol version 1
 
