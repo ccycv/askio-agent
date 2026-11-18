@@ -126,6 +126,13 @@ func writeMigrationFenceDropIn(unitRoot, markerRoot, service string, hook atomic
 	return atomicReplaceFile(target, content, 0o644, hook)
 }
 
+// versionTemplate renders version.Line() through cobra's template engine as a
+// quoted literal, so no character in the embedded build details can be
+// interpreted as a template action.
+func versionTemplate() string {
+	return "{{" + strconv.Quote(version.Line()) + "}}\n"
+}
+
 func NewCLI(opts CLIOptions) *cobra.Command {
 	var cfgPath string
 
@@ -134,6 +141,9 @@ func NewCLI(opts CLIOptions) *cobra.Command {
 		Short:   "Askio service monitor agent",
 		Version: version.Version,
 	}
+	// One line, beginning exactly as before ("askio-monitor version X"); see
+	// version.Line for the compatibility contract.
+	root.SetVersionTemplate(versionTemplate())
 
 	root.PersistentFlags().StringVar(&cfgPath, "config", config.DefaultConfigPath(), "Path to agent YAML config")
 

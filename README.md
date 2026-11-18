@@ -32,10 +32,22 @@ Migration support does not install or run a second public agent. A migration-ena
 
 ## Build
 
+Development build for the host platform (embeds `VERSION` and the git commit):
+
 ```bash
-go build -o ./bin/askio-monitor ./cmd/askio-monitor
+make build
 ./bin/askio-monitor --version
 ```
+
+Release candidate (reproducible Linux `amd64` build with Go 1.22.12, plus a provenance manifest; never promoted automatically):
+
+```bash
+make release                # bin/askio-monitor-linux-amd64 + .sha256 + .provenance.json
+make verify-release         # check the binary against its manifest and source
+make reproducibility-check  # two more clean builds must be byte-identical
+```
+
+See `docs/RELEASE.md` for the recipe, the `--version` contract and how promotion is authorized. Tests target Linux (`go test ./...`, `go test -race ./...`); CI runs them in `.github/workflows/ci.yml`.
 
 ---
 
@@ -99,3 +111,5 @@ Start here:
 - **Remediation playbooks**: `docs/PLAYBOOKS.md`
 - **Security**: `docs/SECURITY.md`
 - **Passive vulnerability inventory** (default off): `docs/PASSIVE_INVENTORY.md`
+- **Inventory enrollment gates and first-host checklist**: `docs/ENROLLMENT.md`
+- **Release, provenance and promotion authorization**: `docs/RELEASE.md`

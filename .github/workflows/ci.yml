@@ -1,0 +1,116 @@
+# Verification only. This workflow builds and checks; it never publishes,
+# uploads, tags, releases or deploys anything (no artifact upload, read-only
+# token). Promotion of an agent build is a separate, owner-authorized step:
+# see docs/RELEASE.md.
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  GO_VERSION: go1.22.12
+  # Official go.dev tarball digest for go1.22.12.linux-amd64.tar.gz.
+  GO_TARBALL_SHA256: 4fa4f869b0f7fc6bb1eb2660e74657fbf04cdd290b5aef905585c86051b34d43
+  GOTOOLCHAIN: local
+  GOFLAGS: -mod=readonly
+  # Inventory wire v1 fixture shared byte-for-byte with Askio's backend.
+  WIRE_V1_SHA256: 3ccf0d0238ddb57762fc9807da641579f1517cba5ad3cfd5c3ecf5b5fcb99d13
+
+jobs:
+  test:
+    name: vet, test, race
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+
+      - name: Install pinned Go toolchain
+        run: |
+          curl -fsSL -o "$RUNNER_TEMP/go.tgz" "https://go.dev/dl/${GO_VERSION}.linux-amd64.tar.gz"
+          echo "${GO_TARBALL_SHA256}  $RUNNER_TEMP/go.tgz" | sha256sum -c -
+          tar -C "$RUNNER_TEMP" -xzf "$RUNNER_TEMP/go.tgz"
+          echo "$RUNNER_TEMP/go/bin" >> "$GITHUB_PATH"
+
+      - name: Toolchain and modules
+        run: |
+          test "$(go env GOVERSION)" = "${GO_VERSION}"
+          go mod verify
+
+      - name: Inventory wire fixture unchanged
+        run: echo "${WIRE_V1_SHA256}  internal/vulnerability/testdata/wire-v1.json" | sha256sum -c -
+
+      - name: gofmt
+        run: ./scripts/check-gofmt.sh
+
+      - name: go vet
+        run: go vet ./...
+
+      - name: go test
+        run: go test -count=1 ./...
+
+      - name: go test -race
+        run: go test -race -count=1 ./...
+
+  release-build:
+    name: release build, provenance, reproducibility
+    needs: test
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      # Pinned builder recorded in Askio's backend/config/agent-release.json.
+      BUILDER_IMAGE: golang@sha256:3d699e4d15d0f8f13c9195c0632a16702b8cbdece2955af1c23b37ae5d55a253
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          # Build the PR head itself, not GitHub's synthetic merge commit, so
+          # the hashes are comparable with any local build of the branch.
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+
+      - name: Install pinned Go toolchain
+        run: |
+          curl -fsSL -o "$RUNNER_TEMP/go.tgz" "https://go.dev/dl/${GO_VERSION}.linux-amd64.tar.gz"
+          echo "${GO_TARBALL_SHA256}  $RUNNER_TEMP/go.tgz" | sha256sum -c -
+          tar -C "$RUNNER_TEMP" -xzf "$RUNNER_TEMP/go.tgz"
+          echo "$RUNNER_TEMP/go/bin" >> "$GITHUB_PATH"
+
+      - name: make release
+        run: RELEASE_BUILDER=github-actions make release
+
+      - name: Verify artifact against manifest (and execute --version)
+        run: ./scripts/verify-release.sh --source . --run bin/askio-monitor-linux-amd64
+
+      - name: Reproducibility (two clean git-archive builds must match)
+        run: RELEASE_BUILDER=github-actions ./scripts/check-reproducible.sh bin/askio-monitor-linux-amd64
+
+      - name: Pinned builder image produces the same bytes
+        run: |
+          HOST_GOMODCACHE="$(go env GOMODCACHE)" RELEASE_BUILDER=github-actions-docker ./scripts/release-build-docker.sh
+          ./scripts/verify-release.sh --source . --run bin/docker/askio-monitor-linux-amd64
+          cmp bin/askio-monitor-linux-amd64 bin/docker/askio-monitor-linux-amd64
+
+      - name: Summary
+        if: always()
+        run: |
+          {
+            echo "### askio-monitor release candidate (not promoted)"
+            echo
+            echo '```'
+            sha256sum bin/askio-monitor-linux-amd64 bin/docker/askio-monitor-linux-amd64 2>/dev/null || true
+            echo '```'
+            echo
+            echo '```json'
+            cat bin/askio-monitor-linux-amd64.provenance.json 2>/dev/null || echo "no manifest"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
