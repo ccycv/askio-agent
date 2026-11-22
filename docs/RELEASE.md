@@ -96,7 +96,7 @@ Do all of this before asking the owner to authorize a promotion:
    - `make reproducibility-check`;
    - `make release-docker`, which must be `cmp`-identical to `bin/askio-monitor-linux-amd64`.
    CI runs the same steps on every pull request.
-4. Write down the candidate's version, commit, artifact SHA-256 and manifest SHA-256, together with the evidence above.
+4. Write down the candidate's version, commit, artifact SHA-256 and manifest SHA-256, together with the evidence above, in `docs/releases/<version>.md` (for example [0.4.40](releases/0.4.40.md)). That file also holds the tag plan; the tag itself waits for the owner.
 
 A merge commit or squash commit is a new commit. Its build embeds a different commit and so has a different digest. Evidence from a pull request's head proves the recipe. It does not prove the digest that gets promoted. Qualify the commit that will actually be promoted.
 
