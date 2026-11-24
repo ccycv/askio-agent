@@ -16,7 +16,7 @@ This document covers how an `askio-monitor` build becomes a release candidate, h
   - the heartbeat `agent_version`;
   - the migration enrollment check against `AGENT_RELEASE_VERSION`;
   - the installers' and agent-update script's version checks.
-- `0.4.39` is the last promoted version: source `50b8bbd…`, SHA-256 `9e577e73…`. `0.4.40` is a candidate that has not been promoted ([notes](releases/0.4.40.md)). `main` has changed since then: the remote inventory switch was added. The next candidate is therefore `0.4.41` ([notes](releases/0.4.41.md)).
+- `0.4.41` is the last promoted version: source `0ddf3d9…`, SHA-256 `e9a4e05b…` (promoted 2026-11-24, ccycv/askio#98). `main` has changed since then: gateway self-update and the sudo-mode unit fix were added (ccycv/askio-agent#8). The next candidate is therefore `0.4.42` ([notes](releases/0.4.42.md)).
 - Git tags are optional, and creating one is the owner's decision. If `HEAD` carries any `v*` tag, `scripts/release-build.sh` requires it to be exactly `v<VERSION>`.
 
 ## `--version` output contract
