@@ -56,12 +56,14 @@ func (SystemdRunExecutor) Run(ctx context.Context, command string, args []string
 	all := []string{"-n", "systemd-run", "--wait", "--collect", "--pipe", "--quiet", "--unit", unit, command}
 	all = append(all, args...)
 	result, err := ExecSimple(ctx, "sudo", all, timeoutSeconds)
-	if err == nil || !isSystemdRunTransientFailure(result.Output) {
+	if err == nil || !(isSystemdRunTransientFailure(result.Output) || isSudoRefusal(result.Output)) {
 		return result, err
 	}
 
 	// Some distros can have systemd-run installed but unable to create transient
-	// units from the agent service context. Keep read-only checks useful by
+	// units from the agent service context, and some installs do not let the
+	// agent run systemd-run through sudo at all (a restricted sudoers policy, or
+	// no_new_privs on the service). In both cases the command never started. Keep read-only checks useful by
 	// falling back to direct unprivileged execution first; many audit checks
 	// only need world-readable config or socket state. If that fails, try the
 	// direct non-interactive sudo path used when systemd-run is unavailable.
@@ -81,6 +83,27 @@ func (SystemdRunExecutor) Run(ctx context.Context, command string, args []string
 
 func (SystemdRunExecutor) Format(command string, args []string) string {
 	return "sudo -n systemd-run --wait --collect --pipe --quiet --unit askio-cmd-<ts> " + command + " " + strings.Join(args, " ")
+}
+
+// isSudoRefusal reports whether sudo itself refused to start the command, so
+// it never ran and running it another way cannot repeat its side effects.
+// Only sudo's own first line counts: output from a command that did run (for
+// example a script that calls sudo internally) does not.
+func isSudoRefusal(output string) bool {
+	first := strings.TrimSpace(output)
+	if i := strings.IndexByte(first, '\n'); i >= 0 {
+		first = strings.TrimSpace(first[:i])
+	}
+	lower := strings.ToLower(first)
+	if strings.HasPrefix(lower, "sorry, user ") && strings.Contains(lower, "is not allowed to execute") {
+		return true
+	}
+	if !strings.HasPrefix(lower, "sudo: ") {
+		return false
+	}
+	return strings.Contains(lower, "a password is required") ||
+		strings.Contains(lower, "no new privileges") ||
+		strings.Contains(lower, "effective uid is not 0")
 }
 
 func isSystemdRunTransientFailure(output string) bool {

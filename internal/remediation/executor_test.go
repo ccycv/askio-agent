@@ -49,3 +49,26 @@ func TestIsSystemdRunTransientFailure(t *testing.T) {
 		})
 	}
 }
+
+func TestIsSudoRefusal(t *testing.T) {
+	cases := []struct {
+		name   string
+		output string
+		want   bool
+	}{
+		{"restricted sudoers", "sudo: a password is required\n", true},
+		{"no_new_privs", "sudo: The \"no new privileges\" flag is set, which prevents sudo from running as root.\nsudo: If sudo is running in a container, you may need to adjust the container configuration to disable the flag.\n", true},
+		{"nosuid", "sudo: effective uid is not 0, is /usr/bin/sudo on a file system with the 'nosuid' option set or an NFS file system without root privileges?", true},
+		{"not allowed", "Sorry, user askio-agent is not allowed to execute '/usr/bin/systemd-run --wait /bin/bash x' as root on host.", true},
+		{"command ran and its own sudo failed", "starting update\nsudo: a password is required\n", false},
+		{"ordinary failure", "cat: /missing: No such file or directory", false},
+		{"empty", "", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := isSudoRefusal(tc.output); got != tc.want {
+				t.Fatalf("isSudoRefusal(%q) = %v, want %v", tc.output, got, tc.want)
+			}
+		})
+	}
+}

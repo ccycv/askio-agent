@@ -339,6 +339,7 @@ func newStartCmd(logger *slog.Logger, cfgPath *string) *cobra.Command {
 					CloudAPIURL:     gw.CloudAPIURL,
 					CloudAgentToken: gw.CloudAgentToken,
 					GatewayServerID: gw.GatewayServerID,
+					DataDir:         cfg.DataDir,
 				})
 				if err != nil {
 					return err
@@ -752,8 +753,15 @@ func systemdUnitTemplate(user, cfgPath string, migrationConfig *config.Migration
 	readWritePaths := "/var/lib/askio-monitor"
 	brokerDependency := ""
 	noNewPrivileges := "false"
+	// PrivateDevices=, RestrictSUIDSGID= and LockPersonality= make systemd set
+	// no_new_privs for a non-root User= even when NoNewPrivileges=false. A
+	// sudo-mode agent then cannot use sudo at all (no capability installs, no
+	// remote updates), so those options belong only to the migration profile,
+	// which sets NoNewPrivileges=true and uses its root broker instead.
+	sandboxExtras := ""
 	if migrationConfig != nil && migrationConfig.Enabled {
 		noNewPrivileges = "true"
+		sandboxExtras = "PrivateDevices=true\nRestrictSUIDSGID=true\nLockPersonality=true\n"
 		paths := []string{"/var/lib/askio-monitor", "/run/askio-monitor", migrationConfig.StateDir}
 		for _, root := range migrationConfig.RootHandles {
 			paths = append(paths, root)
@@ -778,17 +786,14 @@ NoNewPrivileges=%s
 ProtectSystem=strict
 ProtectHome=true
 PrivateTmp=true
-PrivateDevices=true
-RestrictSUIDSGID=true
-LockPersonality=true
-RuntimeDirectory=askio-monitor
+%sRuntimeDirectory=askio-monitor
 RuntimeDirectoryMode=0700
 RuntimeDirectoryPreserve=no
 ReadWritePaths=%s
 
 [Install]
 WantedBy=multi-user.target
-`, brokerDependency, user, cfgPath, noNewPrivileges, readWritePaths)
+`, brokerDependency, user, cfgPath, noNewPrivileges, sandboxExtras, readWritePaths)
 }
 
 func migrationBrokerUnitTemplate(cfgPath string, migrationConfig *config.MigrationConfig) string {
