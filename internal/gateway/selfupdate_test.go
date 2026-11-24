@@ -316,3 +316,44 @@ func TestSelfUpdate_IgnoresOtherCommandTypes(t *testing.T) {
 		t.Fatalf("ignored command not marked: %q", h.server.lastCommandID)
 	}
 }
+
+func TestParseReportedVersion(t *testing.T) {
+	cases := []struct {
+		output string
+		want   string
+		ok     bool
+	}{
+		{"askio-monitor version 0.4.42 (commit abc, go1.22.12, linux/amd64)\n", "0.4.42", true},
+		{"askio-monitor version 0.4.39\n", "0.4.39", true},
+		{"askio-monitor version 0.4.42-rc1 (commit abc)", "0.4.42-rc1", true},
+		{"0.4.42", "", false},
+		{"something else askio-monitor version 0.4.42", "", false},
+		{"", "", false},
+	}
+	for _, tc := range cases {
+		got, ok := parseReportedVersion(tc.output)
+		if got != tc.want || ok != tc.ok {
+			t.Fatalf("parseReportedVersion(%q) = %q, %v; want %q, %v", tc.output, got, ok, tc.want, tc.ok)
+		}
+	}
+}
+
+func TestSelfUpdate_RejectsVersionThatOnlyContainsTheTarget(t *testing.T) {
+	for _, tc := range []struct{ name, target string }{
+		// The test binary reports 0.4.99-test.
+		{"prefix of the reported version", "0.4.9"},
+		{"stable release of a prerelease binary", "0.4.99"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newSelfUpdateHarness(t)
+			h.command["target_version"] = tc.target
+			h.poll()
+			if result := h.lastResult(); result.Status != "failed" || !strings.Contains(result.Error, "version mismatch") {
+				t.Fatalf("target %s must not accept a binary reporting %s: %+v", tc.target, testTargetVersion, result)
+			}
+			if len(h.commands) != 0 || len(h.stagedLeftovers()) != 0 {
+				t.Fatalf("mismatch must not install or leave files: %v", h.commands)
+			}
+		})
+	}
+}

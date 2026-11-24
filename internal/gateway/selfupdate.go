@@ -110,6 +110,26 @@ func (u *selfUpdater) validate(cmd *model.PendingCommand) error {
 	return nil
 }
 
+// reportedVersionPattern matches the first line of `askio-monitor --version`,
+// whose compatibility contract is "askio-monitor version <Version>" followed
+// by nothing or by " (build details)".
+var reportedVersionPattern = regexp.MustCompile(`^askio-monitor version (\S+)(?: \(.*\))?$`)
+
+// parseReportedVersion extracts <Version> so it can be compared exactly: a
+// substring match would accept 0.4.41 for 0.4.4, or a prerelease for a
+// stable release.
+func parseReportedVersion(output string) (string, bool) {
+	line := strings.TrimSpace(output)
+	if i := strings.IndexByte(line, '\n'); i >= 0 {
+		line = strings.TrimSpace(line[:i])
+	}
+	match := reportedVersionPattern.FindStringSubmatch(line)
+	if match == nil {
+		return "", false
+	}
+	return match[1], true
+}
+
 func normalizeSHA256(value string) string {
 	return strings.ToLower(strings.NewReplacer(" ", "", ":", "").Replace(strings.TrimSpace(value)))
 }
@@ -233,8 +253,9 @@ func (u *selfUpdater) prepare(ctx context.Context, cmd *model.PendingCommand) (s
 		err = fmt.Errorf("the downloaded binary could not be executed from %s for its version check: %v %s", dir, runErr, strings.TrimSpace(versionOut))
 		return staged, "", "", err
 	}
-	if !strings.Contains(versionOut, strings.TrimSpace(cmd.TargetVersion)) {
-		err = fmt.Errorf("new binary verification failed - version mismatch (%s)", strings.TrimSpace(versionOut))
+	reportedVersion, ok := parseReportedVersion(versionOut)
+	if !ok || reportedVersion != strings.TrimSpace(cmd.TargetVersion) {
+		err = fmt.Errorf("new binary verification failed - version mismatch (want %s, binary reports %q)", strings.TrimSpace(cmd.TargetVersion), strings.TrimSpace(versionOut))
 		return staged, "", "", err
 	}
 	return staged, mode, strings.TrimSpace(versionOut), nil
