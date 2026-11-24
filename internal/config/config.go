@@ -96,8 +96,73 @@ func migrationAllowedRootsAreCanonical(roots []string) bool {
 	return true
 }
 
+// InventoryConfig is the operator-managed local passive-inventory setting.
+// Enabled is tri-state: nil means the key is absent (the host follows the
+// backend's remote switch), false is a hard local deny that remote config
+// cannot override, and true is the explicit local opt-in.
 type InventoryConfig struct {
-	Enabled bool `yaml:"enabled"`
+	Enabled *bool `yaml:"enabled,omitempty"`
+}
+
+// InventoryLocalSetting is the local half of the passive-inventory gate.
+type InventoryLocalSetting int
+
+const (
+	// InventoryLocalAbsent: no `inventory.enabled` key; follow the remote switch.
+	InventoryLocalAbsent InventoryLocalSetting = iota
+	// InventoryLocalOff: explicit `inventory.enabled: false`; hard deny.
+	InventoryLocalOff
+	// InventoryLocalOn: explicit `inventory.enabled: true`; local opt-in.
+	InventoryLocalOn
+)
+
+// InventoryLocal reports the local inventory setting.
+func (c Config) InventoryLocal() InventoryLocalSetting {
+	if c.Inventory == nil || c.Inventory.Enabled == nil {
+		return InventoryLocalAbsent
+	}
+	if *c.Inventory.Enabled {
+		return InventoryLocalOn
+	}
+	return InventoryLocalOff
+}
+
+// Reasons returned by InventoryRemoteRefusal. They are stable identifiers
+// that appear in logs and `askio-monitor status`; they never carry config values.
+const (
+	InventoryRefusedNotHostMode   = "not_host_mode"
+	InventoryRefusedGateway       = "gateway_configured"
+	InventoryRefusedAPIURL        = "api_url_not_fixed_https"
+	InventoryRefusedTLSSkipVerify = "tls_skip_verify"
+)
+
+// inventoryEndpointFixed reports whether the API URL is a fixed HTTPS
+// endpoint: https scheme, a host, no credentials, query or fragment.
+func inventoryEndpointFixed(apiURL string) bool {
+	endpoint, e := url.Parse(apiURL)
+	return e == nil && endpoint.Scheme == "https" && endpoint.Host != "" && endpoint.User == nil && endpoint.RawQuery == "" && endpoint.Fragment == ""
+}
+
+// InventoryRemoteRefusal returns "" when the backend's remote switch may turn
+// passive inventory on for this config, or the reason it may not. Remote ON
+// requires the same composition as the local opt-in (direct host mode, fixed
+// HTTPS API URL, verified TLS) and, additionally, no gateway stanza at all.
+func (c Config) InventoryRemoteRefusal() string {
+	mode := c.Mode
+	if mode == "" {
+		mode = "host"
+	}
+	switch {
+	case mode != "host":
+		return InventoryRefusedNotHostMode
+	case c.Gateway != nil:
+		return InventoryRefusedGateway
+	case !inventoryEndpointFixed(c.APIURL):
+		return InventoryRefusedAPIURL
+	case c.TLSSkipVerify:
+		return InventoryRefusedTLSSkipVerify
+	}
+	return ""
 }
 
 type Config struct {
@@ -217,14 +282,16 @@ func (c Config) Normalized() (Config, error) {
 		return Config{}, fmt.Errorf("invalid mode: %q", out.Mode)
 	}
 
-	if out.Inventory != nil && out.Inventory.Enabled {
-		endpoint, e := url.Parse(out.APIURL)
-		if e != nil || endpoint.Scheme != "https" || endpoint.Host == "" || endpoint.User != nil || endpoint.RawQuery != "" || endpoint.Fragment != "" {
+	// Only the explicit local opt-in is validated at load time. An absent key
+	// or an explicit false never fails loading; the remote switch is checked
+	// at run time by InventoryRemoteRefusal.
+	if out.InventoryLocal() == InventoryLocalOn {
+		if !inventoryEndpointFixed(out.APIURL) {
 			return Config{}, fmt.Errorf("passive inventory requires a fixed HTTPS API endpoint")
 		}
-	}
-	if out.Inventory != nil && out.Inventory.Enabled && (out.Mode != "host" || out.TLSSkipVerify) {
-		return Config{}, fmt.Errorf("passive inventory requires direct host mode and verified TLS")
+		if out.Mode != "host" || out.TLSSkipVerify {
+			return Config{}, fmt.Errorf("passive inventory requires direct host mode and verified TLS")
+		}
 	}
 	if out.Mode == "gateway" {
 		if out.Gateway == nil {

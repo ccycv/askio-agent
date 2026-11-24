@@ -22,6 +22,7 @@ import (
 	"github.com/askio-cloud/askio-monitor/internal/remediation"
 	"github.com/askio-cloud/askio-monitor/internal/store"
 	"github.com/askio-cloud/askio-monitor/internal/version"
+	"github.com/askio-cloud/askio-monitor/internal/vulnerability"
 )
 
 const (
@@ -49,6 +50,19 @@ type Daemon struct {
 	migrationRunner    *migration.Runner
 	migrationDataPlane *migration.DataPlaneServer
 	migrationActive    atomic.Bool
+
+	// Passive inventory switch. liveRemoteInventory (guarded by mu) is the
+	// remote switch from this process's latest successful config poll; it is
+	// never seeded from the on-disk cache.
+	liveRemoteInventory *model.RemoteInventory
+	inventoryWake       chan struct{}
+	inventoryCollector  *vulnerability.Collector
+	invTiming           inventoryTiming
+	invMu               sync.Mutex
+	invStatus           string
+	invRunning          bool
+
+	configPollJitter time.Duration
 }
 
 func NewDaemon(logger *slog.Logger, cfg cfgpkg.Config) (*Daemon, error) {
@@ -81,6 +95,10 @@ func NewDaemon(logger *slog.Logger, cfg cfgpkg.Config) (*Daemon, error) {
 		detectedCapabilities: detectCapabilities(),
 		auditInFlight:        map[string]struct{}{},
 		auditRecent:          map[string]time.Time{},
+		inventoryWake:        make(chan struct{}, 1),
+		inventoryCollector:   vulnerability.NewCollector(),
+		invTiming:            defaultInventoryTiming,
+		configPollJitter:     5 * time.Second,
 	}
 	if cfg.Migration != nil && cfg.Migration.Enabled {
 		identity, err := migration.LoadOrCreateIdentity(cfg.Migration.KeyDir)
@@ -175,10 +193,10 @@ func (d *Daemon) Run(ctx context.Context) error {
 		d.capabilitiesLoop(ctx)
 	}()
 
-	if inventoryOptedIn(d.cfg) {
-		wg.Add(1)
-		go func() { defer wg.Done(); d.inventoryLoop(ctx) }()
-	}
+	// The supervisor idles while the inventory gate is closed and starts or
+	// stops the inventory loop as the local setting and remote switch allow.
+	wg.Add(1)
+	go func() { defer wg.Done(); d.inventorySupervisor(ctx) }()
 	err := d.schedulerLoop(ctx)
 	wg.Wait()
 	return err
@@ -350,7 +368,8 @@ func (d *Daemon) configPollLoop(ctx context.Context) {
 	interval := d.cfg.ConfigPollInterval()
 
 	// Add jitter so multiple agents don't all poll at once.
-	if j := time.Duration(rand.Intn(5000)) * time.Millisecond; j > 0 {
+	if d.configPollJitter > 0 {
+		j := time.Duration(rand.Int63n(int64(d.configPollJitter)))
 		select {
 		case <-ctx.Done():
 			return
@@ -368,9 +387,7 @@ func (d *Daemon) configPollLoop(ctx context.Context) {
 		if err != nil {
 			d.logger.Warn("config poll failed", "err", err)
 		} else {
-			d.mu.Lock()
-			d.remoteConf = rc
-			d.mu.Unlock()
+			d.setRemoteConfig(rc)
 
 			d.logger.Info("config updated", "monitors", len(rc.Monitors), "fetched_at", rc.FetchedAt, "pending_command", rc.PendingCommand.Legacy)
 
@@ -449,6 +466,21 @@ func (d *Daemon) configPollLoop(ctx context.Context) {
 		case <-ticker.C:
 		}
 	}
+}
+
+// setRemoteConfig records a freshly polled remote config and asks the
+// inventory supervisor to re-evaluate the remote switch.
+func (d *Daemon) setRemoteConfig(rc model.RemoteConfig) {
+	var remote *model.RemoteInventory
+	if rc.Inventory != nil {
+		copied := *rc.Inventory
+		remote = &copied
+	}
+	d.mu.Lock()
+	d.remoteConf = rc
+	d.liveRemoteInventory = remote
+	d.mu.Unlock()
+	d.wakeInventory()
 }
 
 func (d *Daemon) beginAuditJob(runID string) bool {

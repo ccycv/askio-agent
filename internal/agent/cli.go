@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -463,6 +464,7 @@ func newStatusCmd(logger *slog.Logger, cfgPath *string) *cobra.Command {
 			defer st.Close()
 
 			out := map[string]any{"config_path": *cfgPath, "api_url": cfg.APIURL, "server_id": cfg.ServerID, "privilege_mode": cfg.PrivilegeMode, "data_dir": cfg.DataDir}
+			out["inventory"] = statusInventory(cmd.Context(), cfg, st)
 
 			enc := json.NewEncoder(os.Stdout)
 			enc.SetIndent("", "  ")
@@ -470,6 +472,21 @@ func newStatusCmd(logger *slog.Logger, cfgPath *string) *cobra.Command {
 		},
 	}
 	return cmd
+}
+
+// statusInventory reports the passive-inventory gate as local-on, local-off,
+// remote-on, remote-off or remote-refused:<reason>. The remote half comes from
+// the last remote config the daemon cached; an unreadable cache counts as no
+// remote switch. Backend enrollment is a separate gate not shown here.
+func statusInventory(ctx context.Context, cfg config.Config, st store.Store) string {
+	var remote *model.RemoteInventory
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if cached, ok, err := config.NewRemoteConfigManager(nil, st).LoadCached(ctx); err == nil && ok {
+		remote = cached.Inventory
+	}
+	return effectiveInventory(cfg, remote).Status
 }
 
 func newInstallCmd(logger *slog.Logger, cfgPath *string) *cobra.Command {

@@ -14,7 +14,7 @@ import (
 // `-ldflags "-X github.com/askio-cloud/askio-monitor/internal/version.Version=<VERSION>"`
 // (see Makefile and scripts/release-build.sh). It is a var only so the linker
 // can set it; nothing assigns it at run time.
-var Version = "0.4.40"
+var Version = "0.4.41"
 
 // Commit is the full source revision the binary was built from. Release
 // builds set it with -ldflags -X. Builds without it fall back to the VCS
