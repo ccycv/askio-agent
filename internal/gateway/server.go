@@ -31,6 +31,7 @@ type Server struct {
 
 	httpClient *http.Client
 	server     *http.Server
+	updater    *selfUpdater
 
 	lastCommandID string
 }
@@ -43,6 +44,8 @@ type Config struct {
 	CloudAPIURL     string
 	CloudAgentToken string
 	GatewayServerID string
+	// DataDir is the agent data directory, used to stage self-updates.
+	DataDir string
 }
 
 func NewServer(cfg Config) (*Server, error) {
@@ -72,6 +75,7 @@ func NewServer(cfg Config) (*Server, error) {
 		key:        cfg.TokenHMACKey,
 		gatewayServerID: cfg.GatewayServerID,
 		httpClient: &http.Client{Timeout: 20 * time.Second},
+		updater:    newSelfUpdater(cfg.DataDir),
 	}
 	return s, nil
 }
@@ -242,8 +246,14 @@ func (s *Server) pollOnce(ctx context.Context) error {
 	if cmd.CommandID == s.lastCommandID {
 		return nil
 	}
+	if cmd.Type == updateCommandType && s.updater != nil {
+		// Mark it handled first: a successful update restarts this process.
+		s.lastCommandID = cmd.CommandID
+		s.handleSelfUpdate(ctx, cmd)
+		return nil
+	}
 	if cmd.Type != "generate_host_token" {
-		// v1: ignore other command types in gateway poller
+		// The gateway runs no backend scripts: every other type is ignored.
 		s.lastCommandID = cmd.CommandID
 		return nil
 	}

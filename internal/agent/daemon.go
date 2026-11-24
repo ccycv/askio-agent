@@ -381,6 +381,9 @@ func (d *Daemon) configPollLoop(ctx context.Context) {
 	defer ticker.Stop()
 
 	var lastCommandKey string
+	// The backend clears a delivered command, but if that clear is lost the
+	// same command comes back on the next poll: never run one command twice.
+	var lastV2CommandID string
 
 	for {
 		rc, err := mgr.PollOnce(ctx, d.cfg.ServerID)
@@ -434,6 +437,11 @@ func (d *Daemon) configPollLoop(ctx context.Context) {
 					"timeout_seconds", rc.PendingCommand.V2.TimeoutSeconds,
 					"execution_mode", rc.PendingCommand.V2.ExecutionMode,
 				)
+				if id := rc.PendingCommand.V2.CommandID; id != "" && id == lastV2CommandID {
+					d.logger.Info("pending_command_v2 already handled; skipping duplicate delivery", "command_id", id)
+					goto wait
+				}
+				lastV2CommandID = rc.PendingCommand.V2.CommandID
 				go d.handlePendingCommandV2(ctx, rc.PendingCommand.V2)
 				goto wait
 			}

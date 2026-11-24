@@ -214,7 +214,7 @@ type OperationsStepResult struct {
 // ---- Command execution (install_capability / exec_script) ----
 
 type PendingCommand struct {
-	Type           string `json:"type"` // exec_script|install_capability
+	Type           string `json:"type"` // exec_script|install_capability|generate_host_token|update_agent
 	CommandID      string `json:"command_id"`
 	TimeoutSeconds int    `json:"timeout_seconds,omitempty"`
 	ExecutionMode  string `json:"execution_mode,omitempty"` // live|dry_run
@@ -228,6 +228,11 @@ type PendingCommand struct {
 
 	// script payload
 	ScriptB64 string `json:"script_b64,omitempty"`
+
+	// update_agent (gateway self-update): a typed command, never a script.
+	BinaryURL     string `json:"binary_url,omitempty"`
+	BinarySHA256  string `json:"binary_sha256,omitempty"`
+	TargetVersion string `json:"target_version,omitempty"`
 }
 
 type PendingCommandOrString struct {

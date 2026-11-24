@@ -74,6 +74,13 @@ func (d *Daemon) handlePendingCommandV2(ctx context.Context, cmd *model.PendingC
 		return
 	}
 
+	if cmd.Type == "update_agent" {
+		// The typed update is for gateways; hosts update through exec_script.
+		result.Error = "update_agent is handled by gateway agents only; hosts are updated with an exec_script command"
+		d.finishAndPostCommandResult(ctx, result)
+		return
+	}
+
 	script, err := decodeScriptB64(cmd.ScriptB64)
 	if err != nil {
 		result.Error = err.Error()
