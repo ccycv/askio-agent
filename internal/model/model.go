@@ -70,6 +70,18 @@ type RemoteConfig struct {
 	PendingAction   *PendingAction   `json:"pending_action,omitempty"`
 	PendingAuditJob *PendingAuditJob `json:"pending_audit_job,omitempty"`
 	Capabilities    map[string]any   `json:"capabilities,omitempty"`
+
+	// Inventory is the backend's remote switch for passive inventory. The
+	// backend sends it only while its inventory feature flag is on; enabled is
+	// true only for the agent of a current, enabled enrollment. The agent
+	// honours it only when the local key is absent and the host composition
+	// is safe (see agent.effectiveInventory); a local false always wins.
+	Inventory *RemoteInventory `json:"inventory,omitempty"`
+}
+
+// RemoteInventory is the `inventory` object of monitor-agent-config.
+type RemoteInventory struct {
+	Enabled bool `json:"enabled"`
 }
 
 type DiscoveredService struct {

@@ -6,16 +6,31 @@ This internal capability collects installed-package observations only. It is dis
 
 This change starts from source revision `50b8bbdae511942d5049e7240c7b1235d2bf8fef`, the source pinned by Askio's retained agent `0.4.39` release metadata (Linux amd64 artifact SHA-256 `9e577e732d2bd10e748b39a84349cb596b32cafd8a4f546dc61f9c8c07f34b17`). That source tree was already merged to agent remote main. The older primary local checkout was not the distributed source baseline. This PR does not replace an artifact, change the version, install an agent or enable enrollment. A future release must separately build, version, promote and qualify its artifact.
 
-## Explicit enablement
+## Enablement
 
-An operator-managed host config must opt in:
+Collection needs two gates, the host gate and backend enrollment. Neither is open by default.
 
-```yaml
-inventory:
-  enabled: true
-```
+The host gate (agent 0.4.41 and later) has three inputs, decided in this order:
 
-Enrollment gating, its tests and the first-host checklist are in [ENROLLMENT.md](ENROLLMENT.md). The collector requires direct `host` mode and a fixed HTTPS API URL with verified TLS. `tls_skip_verify`, gateway mode, URL credentials and query/fragment overrides are rejected for this capability. The backend must independently enable its feature and enroll the current agent. Neither remote monitor config nor a generic task can enable this loop. With the local option absent or false, no inventory polling or collection occurs.
+1. **Local hard opt-out.** `inventory: {enabled: false}` in the operator-managed `/etc/askio/monitor.conf` keeps collection off whatever the backend says.
+2. **Local opt-in.** `inventory: {enabled: true}` turns the host gate on, as in 0.4.40.
+3. **Remote switch.** With the local key absent, the host follows `"inventory": {"enabled": true|false}` in the `monitor-agent-config` response.
+   - A missing field or `false` is off.
+   - `true` is honoured only in direct `host` mode, with no `gateway` stanza, a fixed HTTPS API URL and verified TLS. Otherwise the agent stays off and logs the refusal reason once.
+
+**Security change:** from 0.4.41 the backend can turn collection on for an enrolled host whose operator has not written the key. The installer never writes it. Operators who want a local-only decision must set `enabled: false`, or set `true`.
+
+The inventory loop is dynamic:
+
+- It starts within one config poll after the host gate opens.
+- It stops within one config poll after the gate closes. Its context is cancelled, so no further claim, page or completion is sent, and an upload in flight is dropped as on restart.
+- A remote switch cached on disk is not honoured until this process has polled it live.
+
+`askio-monitor status` reports the host gate as `local-on`, `local-off`, `remote-on`, `remote-off` or `remote-refused:<reason>`.
+
+The backend must independently enable its feature and enroll the current agent. It sends remote `true` only for an enrolled agent whose assignment is enabled, and every claim is still gated by enrollment. A generic task, pending action or command cannot open the host gate. With the host gate closed, no inventory polling or collection occurs.
+
+Gate details, the reason codes, the tests, the residual risks and the first-host checklist are in [ENROLLMENT.md](ENROLLMENT.md). The local opt-in is validated when the config is loaded: `tls_skip_verify`, gateway mode, URL credentials and query/fragment overrides are rejected.
 
 ## Protocol version 1
 
@@ -51,7 +66,7 @@ The target is Linux. Use the pinned Go 1.22.12 toolchain to run:
 
 ```sh
 go test ./...
-go test -race ./internal/vulnerability ./internal/api ./internal/config
+go test -race ./internal/vulnerability ./internal/api ./internal/config ./internal/agent
 go vet ./...
 GOOS=linux GOARCH=amd64 go build -o /tmp/askio-monitor-p103 ./cmd/askio-monitor
 ```

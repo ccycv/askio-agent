@@ -93,9 +93,12 @@ Expected JSON (agent-side):
       "remediation_policy": "reload_first",
       "allowed_playbook_ids": ["nginx_test_reload", "systemd_restart"]
     }
-  ]
+  ],
+  "inventory": { "enabled": false }
 }
 ```
+
+`inventory` is optional and is sent only while the backend's inventory feature is on. It is the remote switch for passive inventory (agent 0.4.41 and later). It applies only when the local config has no `inventory.enabled` key. A local `inventory: {enabled: false}` always keeps collection off. See [ENROLLMENT.md](ENROLLMENT.md#host-gate).
 
 ## Notes for developers
 
