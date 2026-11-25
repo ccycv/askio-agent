@@ -50,7 +50,7 @@ func TestProvenanceCompletionHasSeparateBoundWithoutExpandingPagesOrResponses(t 
 	if e != nil {
 		t.Fatal(e)
 	}
-	completion := vulnerability.Completion{Capture: vulnerability.Capture{Collector: vulnerability.CollectorIdentity{Name: "askio-dpkg-passive", Version: vulnerability.ProvenanceCollectorVersion}, Provenance: &vulnerability.ProvenanceReport{Sources: []vulnerability.ProvenanceSource{{SignedInRelease: strings.Repeat("x", 300000)}}}}}
+	completion := vulnerability.Completion{Capture: vulnerability.Capture{Collector: vulnerability.CollectorIdentity{Name: "askio-dpkg-passive", Version: vulnerability.ProvenanceCollectorVersion}, Provenance: &vulnerability.ProvenanceReport{Sources: []vulnerability.ProvenanceSource{{Codename: strings.Repeat("x", 300000)}}}}}
 	if e = c.CompleteInventory(context.Background(), completion); e != nil {
 		t.Fatal(e)
 	}
@@ -62,7 +62,7 @@ func TestProvenanceCompletionHasSeparateBoundWithoutExpandingPagesOrResponses(t 
 	if e = c.inventoryJSON(context.Background(), "monitor-agent-inventory-page", completion, nil); e == nil {
 		t.Fatal("page limit widened")
 	}
-	completion.Capture.Provenance.Sources[0].SignedInRelease = strings.Repeat("x", vulnerability.MaxProvenanceCompletionBytes)
+	completion.Capture.Provenance.Sources[0].Codename = strings.Repeat("x", vulnerability.MaxProvenanceCompletionBytes)
 	if e = c.CompleteInventory(context.Background(), completion); e == nil {
 		t.Fatal("oversized completion sent")
 	}

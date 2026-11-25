@@ -189,7 +189,17 @@ def main():
             control_tar = archive_stream(raw, "--ctrl-tarfile")
             with tarfile.open(fileobj=io.BytesIO(control_tar)) as archive:
                 control = archive.extractfile("./control").read().decode()
+                try:
+                    md5sums = archive.extractfile("./md5sums").read()
+                except KeyError:
+                    raise ValueError("retained archive has no md5sums")
             identity = fields(control)
+            # dpkg records the archive's own md5sums at unpack; the signed-index
+            # verifier compares the installed payload with this record.
+            info = fs / "var/lib/dpkg/info"
+            info.mkdir(parents=True, exist_ok=True)
+            recorded = identity["Package"] + (":" + identity["Architecture"] if identity.get("Multi-Arch") == "same" else "")
+            (info / (recorded + ".md5sums")).write_bytes(md5sums)
             status.append(control.replace("Package: " + identity["Package"] + "\n", "Package: " + identity["Package"] + "\nStatus: install ok installed\n", 1))
             expected.append({"binaryName": identity["Package"], "architecture": identity["Architecture"], "version": identity["Version"], "origin": "official"})
             release_path, release_sha, index_path, index_sha, index_size, relative = entry

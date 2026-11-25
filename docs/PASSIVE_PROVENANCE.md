@@ -1,8 +1,15 @@
-# Cached package provenance observations
+# Signed-index package provenance observations
 
-This capability compares an installed package's non-configuration payload with a
-published archive artifact using evidence already present on the host. It remains
-part of the locally enabled passive inventory loop. This source change does not
+This capability shows that an installed package's exact identity is published in
+an official signed archive index, and that its installed files still match dpkg's
+recorded checksums, using evidence already present on the host. It remains part
+of the locally enabled passive inventory loop.
+
+Verifier `signed-index-v1` replaces `cached-deb-chain-v1`. The older verifier
+compared installed files with the exact cached `.deb`, but ordinary APT operation
+removes cached archives: on the 2026-11-25 trial hosts no evaluated package had
+one, so every origin stayed unknown. Every evaluated package there was listed in
+a signed official index with intact installed files. This source change does not
 promote an agent release, enable enrollment, or change the host's package state.
 
 ## Negotiation and trust boundary
@@ -17,16 +24,29 @@ new advertised collector version; unsupported claims remain unsupported.
 The provenance capture adds `capture.provenance`. Its versioned report contains
 shared source observations and exact package receipts. An official-origin row
 has one reference, `provenance:<SHA256 of canonical receipt>`. A verified receipt
-binds binary name, architecture, full binary version, source name/version, signed
-metadata, archive digest/size and a sorted installed-file manifest. The manifest
-digest uses the same canonical JSON algorithm as the inventory protocol.
+binds binary name, architecture, full binary version, source name/version, the
+signed source (suite, codename, InRelease digest, index path/digest/size), the
+selected stanza's SHA-256, the published archive digest/size, the SHA-256 of
+dpkg's recorded checksum list and the number of installed files compared.
+
+Receipts cover only installed packages whose source the backend evaluates: Nginx,
+Apache, the release's distribution PHP branch, OpenSSH, OpenSSL, glibc, systemd,
+sudo and curl (askio `backend/packages/vulnerabilities/src/package-scope.ts`,
+batches 0 and 1). A new scope batch needs a matching agent change.
 
 These are attributed observations from the enrolled host. The compact report
-retains signed InRelease bytes, the exact selected package stanza, the verified
-full index digest, archive digest and compared-file manifest. It does not retain
-the entire Packages index or `.deb`. The backend can validate the report's
-consistency and identity binding; the stanza and index digest alone do not let it
-independently verify index membership. A compromised host can lie about local
+retains digests, not the signed InRelease bytes, stanza, index or checksum list:
+three Ubuntu InRelease files alone exceed the 512 KiB report budget. The
+InRelease digests name public files that can be checked against the archive's
+history. The backend validates the report's consistency and identity binding; it
+cannot independently verify signatures or index membership.
+
+What `signed-index-v1` does not show: it does not compare installed files with
+the published archive. dpkg's checksum list is local state written at unpack, so
+a locally rebuilt package that reuses the exact published version, or a host that
+rewrote dpkg's records, is not detected. An installed build that is no longer
+listed in the current indexes (a newer update was published and the host has not
+upgraded) stays unknown, even though it may be the build an advisory affects. A compromised host can lie about local
 bytes or tool output. No receipt proves the historical APT installation
 transaction, absence of compromise, current configuration safety or action
 authority.
@@ -64,17 +84,16 @@ For Ubuntu 24.04 and Debian 13 amd64, the verifier:
    verifies the entire decompressed index's size and SHA-256 against InRelease.
    The selected stanza must match the installed binary/version/architecture and
    source name/version exactly. Different same-version artifact digests conflict.
-4. Finds the exact SHA-256/size `.deb` in the existing cache. Fixed
-   `/usr/bin/dpkg-deb --ctrl-tarfile -` and `--fsys-tarfile -` read its already
-   verified bytes from stdin. Nothing is extracted to disk. Archive control
-   identity must independently match the installed row and signed stanza.
-5. Compares every non-config regular payload file's SHA-256 and size, and every
-   non-config symlink's exact target. The authenticated archive's conffiles are
-   explicit `config_excluded` manifest entries. Config contents are not claimed
-   to match publisher defaults. A receipt requires at least one compared payload
-   entry. Diversions, modified/unreadable files, unsupported special/hard-link
-   entries, duplicate/traversing paths and unsafe directory/link traversal leave
-   origin unknown.
+4. Reads dpkg's recorded checksum list for the package from
+   `/var/lib/dpkg/info/<package>.md5sums` (or `<package>:<arch>.md5sums` for
+   Multi-Arch: same; both present is ambiguous). It must be root-owned, not
+   group/world-writable, non-empty and well formed, with no duplicate or
+   traversing path.
+5. Computes the MD5 of every listed installed file and requires it to equal the
+   recorded value. dpkg does not list conffiles there, so config contents are not
+   claimed. Diversions, modified/unreadable files, unsafe directory/link
+   traversal and files that change while read leave origin unknown. A receipt
+   requires at least one compared file.
 
 Publisher fingerprint pins are versioned with the trust policy:
 
@@ -111,10 +130,11 @@ never extends a later action deadline. Future metadata or signatures are refused
 
 ## Fixed reads, bounds and incomplete evidence
 
-The only cache roots are `/var/lib/apt/lists`, `/var/cache/apt/archives`, and the
+The only roots are `/var/lib/apt/lists`, `/var/lib/dpkg/info`, and the
 distribution archive keyring in `/usr/share/keyrings`. Dpkg diversions are read
 from `/var/lib/dpkg/diversions` and included in the capture state fingerprint.
-Installed paths come only from authenticated archive entries. Descriptor-relative
+Installed paths come only from dpkg's checksum list for a package whose exact
+identity matched a signed index. Descriptor-relative
 no-follow traversal rejects symlink substitution and writable/non-root parents;
 the four fixed distro `/usr` merge aliases have explicit target checks. File and
 symlink identities are checked around observation. As with inventory capture,
@@ -124,10 +144,10 @@ discard all official-origin classifications.
 
 The verifier has a 45-second context inside the existing capture deadline, at
 most 16 indexes, 128 MiB per decompressed index and 256 MiB in total. Directory
-enumerations stop at 4,096 entries. Archive candidates stop at 128; archive reads
-are capped at 256 MiB per capture, with at most 64 MiB per `.deb`. Payload streams
-are capped at 256 MiB, each regular file at 64 MiB, manifests at 4,096 files per
-receipt, receipts at 32, and the audit report at 512 KiB. Existing inventory
+enumerations stop at 4,096 entries. Checksum lists are capped at 4 MiB and 8,192
+files per package, installed reads at 1 GiB per capture, receipts at 128, and the
+audit report at 512 KiB. On the 2026-11-25 Ubuntu 24.04 trial hosts a capture
+produced 26 verified receipts in about 5 seconds with a 16 KB report. Existing inventory
 page/capture limits also apply. Provenance completions have a separate
 655,360-byte wire ceiling; the ordinary 262,144-byte page/response ceilings and
 1,900,000-byte capture ceiling do not increase. An exceeded budget leaves affected package
@@ -135,15 +155,16 @@ origins unknown; it does not manufacture a complete verified subset.
 
 Commands use fixed absolute executables, fixed operations and a clean
 environment. There is no shell, package-manager lock, `apt update`, download,
-installation, script execution, repair or fallback mutation. Cached archives are
-often absent on real hosts; that remains unknown and is not repaired.
+installation, script execution, repair or fallback mutation. A missing index or
+checksum list remains unknown and is not repaired.
 
 ## Qualification
 
-Unit fixtures using an authenticated-cache seam are deliberately synthetic and
+Unit fixtures using an authenticated-index seam are deliberately synthetic and
 do not claim official signature provenance. They verify classification, identity
-binding, negative signature status, missing evidence, payload mismatch, unsafe
-paths and unchanged v1 behavior. A separate offline Linux corpus using real
+binding, scope selection, same-archive pocket duplicates, negative signature
+status, missing/malformed/traversing checksum lists, changed or unreadable files
+and unchanged v1 behavior. A separate offline Linux corpus using real
 publisher-signed cached metadata and exact artifact bytes is needed to qualify
 the native command/filesystem chain. An actual deployed/enrolled agent receipt
 and any production rollout are separate outcomes.
@@ -169,7 +190,14 @@ and multiple signed messages. Structural synthetic certificate fixtures cover
 Ubuntu's conservative expiration/revocation refusal; the real Ubuntu retained
 chain must also pass the exact inspected-certificate descriptor path.
 
-Local qualification receipts are retained separately:
+`signed-index-v1` has been run, unenrolled and read-only as an unprivileged user,
+on the two Ubuntu 24.04 trial hosts (devclash-web and devclash-api, 2026-11-25):
+26/26 evaluated packages verified on each, the capture was complete and stable,
+and `PrepareUpload` accepted it. The retained-corpus run below has not yet been
+repeated for `signed-index-v1`; the corpus script now writes each archive's
+md5sums into dpkg's info directory so it can be.
+
+Local qualification receipts for `cached-deb-chain-v1` are retained separately:
 
 - [Archive/capture results](qualification/passive-provenance-2026-10-26.json):
   46 unique signed-origin artifacts in 14 positive captures, all eight paired
