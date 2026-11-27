@@ -61,6 +61,7 @@ type Daemon struct {
 	invMu               sync.Mutex
 	invStatus           string
 	invRunning          bool
+	invPoller           *vulnerability.Poller
 
 	configPollJitter time.Duration
 }
@@ -328,6 +329,9 @@ func (d *Daemon) postHeartbeat(ctx context.Context) error {
 		"os_info":               detectOS(),
 		"detected_capabilities": caps,
 		"capabilities":          reportedCapabilities,
+	}
+	if status := d.inventoryStatusReport(); status != nil {
+		payload["inventory_status"] = status
 	}
 	if d.migrationRunner != nil {
 		attestationContext, cancel := context.WithTimeout(ctx, 8*time.Second)

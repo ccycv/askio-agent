@@ -96,6 +96,32 @@ func (d *Daemon) recordInventoryState(status string, running bool) {
 	d.invMu.Unlock()
 }
 
+func (d *Daemon) setInventoryPoller(p *vulnerability.Poller) {
+	d.invMu.Lock()
+	d.invPoller = p
+	d.invMu.Unlock()
+}
+
+// inventoryStatusReport is the heartbeat's inventory_status: the gate status,
+// whether the loop runs, and what its last cycle did (stage, reason code,
+// counts and durations), so a host that never completes an inventory can be
+// diagnosed from the backend. Nil until the gate has been evaluated.
+func (d *Daemon) inventoryStatusReport() map[string]any {
+	d.invMu.Lock()
+	status, running, poller := d.invStatus, d.invRunning, d.invPoller
+	d.invMu.Unlock()
+	if status == "" {
+		return nil
+	}
+	report := map[string]any{"gate": status, "running": running}
+	if poller != nil {
+		if last, ok := poller.LastCycle(); ok {
+			report["last_cycle"] = last
+		}
+	}
+	return report
+}
+
 // inventoryState reports the last evaluated gate status and whether the
 // inventory loop is running.
 func (d *Daemon) inventoryState() (string, bool) {
@@ -119,6 +145,7 @@ func (d *Daemon) inventorySupervisor(ctx context.Context) {
 		cancel()
 		<-done
 		cancel, done = nil, nil
+		d.setInventoryPoller(nil)
 	}
 	last := ""
 	defer func() {
@@ -135,6 +162,7 @@ func (d *Daemon) inventorySupervisor(ctx context.Context) {
 		switch {
 		case decision.On && cancel == nil:
 			if poller := d.newInventoryPoller(d.inventoryCollector); poller != nil {
+				d.setInventoryPoller(poller)
 				loopCtx, stop := context.WithCancel(ctx)
 				finished := make(chan struct{})
 				cancel, done = stop, finished
