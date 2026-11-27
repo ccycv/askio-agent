@@ -16,7 +16,7 @@ This document covers how an `askio-monitor` build becomes a release candidate, h
   - the heartbeat `agent_version`;
   - the migration enrollment check against `AGENT_RELEASE_VERSION`;
   - the installers' and agent-update script's version checks.
-- `0.4.44` is the last promoted version: source `d876cf9…`, SHA-256 `64e596cd…` (promoted 2026-11-27, ccycv/askio#125). `main` has changed since then: every passive host call of a capture is bounded, a hung origin verification is abandoned, and the heartbeat reports the step a cycle is in. The next candidate is therefore `0.4.45` ([notes](releases/0.4.45.md)).
+- `0.4.45` is the last promoted version: source `27d61fc…`, SHA-256 `ec0643e8…` (promoted 2026-11-27, ccycv/askio#127). `main` has changed since then: origin verification streams package indexes instead of loading them whole and is skipped on hosts close to running out of memory. The next candidate is therefore `0.4.46` ([notes](releases/0.4.46.md)).
 - Git tags are optional, and creating one is the owner's decision. If `HEAD` carries any `v*` tag, `scripts/release-build.sh` requires it to be exactly `v<VERSION>`.
 
 ## `--version` output contract
