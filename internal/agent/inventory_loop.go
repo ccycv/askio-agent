@@ -118,6 +118,9 @@ func (d *Daemon) inventoryStatusReport() map[string]any {
 		if last, ok := poller.LastCycle(); ok {
 			report["last_cycle"] = last
 		}
+		if progress, ok := poller.Progress(); ok {
+			report["in_progress"] = progress
+		}
 	}
 	return report
 }
