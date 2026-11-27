@@ -16,7 +16,7 @@ This document covers how an `askio-monitor` build becomes a release candidate, h
   - the heartbeat `agent_version`;
   - the migration enrollment check against `AGENT_RELEASE_VERSION`;
   - the installers' and agent-update script's version checks.
-- `0.4.43` is the last promoted version: source `36dbc2e…`, SHA-256 `7862b11c…` (promoted 2026-11-25, ccycv/askio#104). `main` has changed since then: the idle vulnerability inventory poll follows the backend instead of a fixed minute (this change). The next candidate is therefore `0.4.44` ([notes](releases/0.4.44.md)).
+- `0.4.43` is the last promoted version: source `36dbc2e…`, SHA-256 `7862b11c…` (promoted 2026-11-25, ccycv/askio#104). `main` has changed since then: the idle vulnerability inventory poll follows the backend, downgraded receipts of an unstable capture carry no installed evidence, and the heartbeat reports the inventory status (ccycv/askio-agent#12). The next candidate is therefore `0.4.44` ([notes](releases/0.4.44.md)).
 - Git tags are optional, and creating one is the owner's decision. If `HEAD` carries any `v*` tag, `scripts/release-build.sh` requires it to be exactly `v<VERSION>`.
 
 ## `--version` output contract
