@@ -16,7 +16,7 @@ This document covers how an `askio-monitor` build becomes a release candidate, h
   - the heartbeat `agent_version`;
   - the migration enrollment check against `AGENT_RELEASE_VERSION`;
   - the installers' and agent-update script's version checks.
-- `0.4.46` is the last promoted version: source `021bfb8c…`, SHA-256 `91dc5ecf…` (promoted 2026-11-27, ccycv/askio#128). `main` has changed since then: the host and gateway heartbeats report how the agent can replace its own binary (`self_update`), and the gateway no longer hands a binary to an updater whose path unit is inactive. The next candidate is therefore `0.4.47` ([notes](releases/0.4.47.md)).
+- `0.4.46` is the last promoted version: source `021bfb8c…`, SHA-256 `91dc5ecf…` (promoted 2026-11-27, ccycv/askio#128). `main` has changed since then: the host and gateway heartbeats report how the agent can replace its own binary (`self_update`), and the gateway no longer hands a binary to an updater whose path unit is inactive. The next candidate is therefore `0.4.47` ([notes](releases/0.4.47.md)). `0.4.48` ([notes](releases/0.4.48.md)) follows it and adds inventory and origin verification on Ubuntu 22.04, Debian 12 and Ubuntu 26.04.
 - Git tags are optional, and creating one is the owner's decision. If `HEAD` carries any `v*` tag, `scripts/release-build.sh` requires it to be exactly `v<VERSION>`.
 
 ## `--version` output contract
