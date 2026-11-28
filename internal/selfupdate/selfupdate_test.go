@@ -20,8 +20,10 @@ type fixture struct {
 	calls []string
 	// isActive is the exit status of `systemctl is-active` (0 active, 3 inactive, -1 cannot run).
 	isActive int
-	// sudoList is whether `sudo -n -l install|systemctl` succeeds.
+	// sudoList is whether `sudo -n -l` lists NOPASSWD for install and systemctl.
 	sudoList bool
+	// listing, when set, is the `sudo -n -l` output instead.
+	listing string
 }
 
 func newFixture(t *testing.T) *fixture {
@@ -54,6 +56,16 @@ func newFixture(t *testing.T) *fixture {
 				return exitErr(1)
 			}
 			return nil
+		},
+		Output: func(_ context.Context, name string, args ...string) (string, error) {
+			f.calls = append(f.calls, strings.Join(append([]string{name}, args...), " "))
+			if f.listing != "" {
+				return f.listing, nil
+			}
+			if f.sudoList {
+				return "User askio-agent may run the following commands on host:\n    (root) NOPASSWD: /usr/bin/install, /usr/bin/systemctl\n", nil
+			}
+			return "", exitErr(1)
 		},
 	}
 	f.noNewPrivs(t, false)
@@ -231,5 +243,55 @@ func TestDefaultProbePaths(t *testing.T) {
 	if probe.UpdaterDir != "/var/lib/askio-monitor/update" || probe.HelperPath != "/usr/local/bin/askio-ops" ||
 		probe.UpdaterUnit != "/etc/systemd/system/askio-monitor-updater.path" || probe.ProcStatus != "/proc/self/status" {
 		t.Fatalf("got %+v", probe)
+	}
+}
+
+// Listing a command is not running it without a password (review on #15):
+// a mixed sudoers lets `sudo -n -l install` succeed while `sudo -n install`
+// asks for a password.
+func TestSudoNeedsNoPasswordEntriesNotJustListing(t *testing.T) {
+	f := newFixture(t)
+	f.listing = `Matching Defaults entries for askio-agent on host:
+    env_reset, mail_badpass
+
+User askio-agent may run the following commands on host:
+    (root) NOPASSWD: /usr/bin/apt-get update
+    (root) /usr/bin/install, /usr/bin/systemctl
+`
+	report := Detect(context.Background(), f.probe)
+	if report.Path != PathNone || report.ReasonCode != ReasonNoPrivilege {
+		t.Fatalf("password-protected install/systemctl must not count as sudo: %+v", report)
+	}
+	f.listing = "User askio-agent may run the following commands on host:\n    (ALL : ALL) NOPASSWD: ALL\n"
+	if report := Detect(context.Background(), f.probe); report.Path != PathSudo {
+		t.Fatalf("NOPASSWD: ALL is passwordless sudo: %+v", report)
+	}
+}
+
+func TestNoPasswordCommands(t *testing.T) {
+	header := "User askio-agent may run the following commands on host:\n"
+	cases := []struct {
+		name    string
+		entries string
+		want    map[string]bool
+	}{
+		{"nopasswd both", "    (root) NOPASSWD: /usr/bin/install, /bin/systemctl\n", map[string]bool{"install": true, "systemctl": true}},
+		{"tag stops at PASSWD", "    (root) NOPASSWD: /usr/bin/install, PASSWD: /bin/systemctl\n", map[string]bool{"install": true}},
+		{"other tags kept", "    (root) SETENV: NOPASSWD: /usr/bin/install *\n", map[string]bool{"install": true}},
+		{"no tag means password", "    (ALL : ALL) ALL\n", map[string]bool{}},
+		{"negated ignored", "    (root) NOPASSWD: !/usr/bin/install, /usr/bin/systemctl\n", map[string]bool{"systemctl": true}},
+		{"defaults are not entries", "", map[string]bool{}},
+	}
+	for _, tc := range cases {
+		listing := "Matching Defaults entries for askio-agent on host:\n    (root) NOPASSWD: /usr/bin/install\n\n" + header + tc.entries
+		got := NoPasswordCommands(listing, "install", "systemctl")
+		if len(got) != len(tc.want) {
+			t.Fatalf("%s: got %v, want %v", tc.name, got, tc.want)
+		}
+		for key := range tc.want {
+			if !got[key] {
+				t.Fatalf("%s: got %v, want %v", tc.name, got, tc.want)
+			}
+		}
 	}
 }

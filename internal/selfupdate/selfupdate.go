@@ -24,6 +24,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 )
@@ -75,6 +76,9 @@ type Probe struct {
 	AllowGenericSudo bool
 	// Run runs a command; only its exit status matters. A nil error is exit 0.
 	Run func(ctx context.Context, name string, args ...string) error
+	// Output runs a command and returns its standard output (hosts only:
+	// `sudo -n -l`, to read which commands need no password).
+	Output func(ctx context.Context, name string, args ...string) (string, error)
 }
 
 // DefaultProbe is the probe for the installed agent.
@@ -90,7 +94,105 @@ func DefaultProbe(dataDir string, allowGenericSudo bool) Probe {
 		HelperPath:       "/usr/local/bin/askio-ops",
 		AllowGenericSudo: allowGenericSudo,
 		Run:              runQuiet,
+		Output:           outputQuiet,
 	}
+}
+
+// outputQuiet returns at most 64 KiB of a command's standard output.
+func outputQuiet(ctx context.Context, name string, args ...string) (string, error) {
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, name, args...)
+	var out limitedBuffer
+	cmd.Stdout = &out
+	err := cmd.Run()
+	return out.String(), err
+}
+
+type limitedBuffer struct{ data []byte }
+
+func (b *limitedBuffer) Write(p []byte) (int, error) {
+	if room := 64<<10 - len(b.data); room > 0 {
+		if len(p) > room {
+			b.data = append(b.data, p[:room]...)
+		} else {
+			b.data = append(b.data, p...)
+		}
+	}
+	return len(p), nil
+}
+
+func (b *limitedBuffer) String() string { return string(b.data) }
+
+// sudoTag matches a leading sudoers tag such as "NOPASSWD:" or "SETENV:".
+var sudoTag = regexp.MustCompile(`^([A-Z_]+):\s*`)
+
+// NoPasswordCommands reads `sudo -n -l` output and reports, for each name in
+// want (a command basename), whether a NOPASSWD entry allows it. An exit
+// status of 0 from `sudo -n -l <command>` proves only that the command is
+// permitted, not that it runs without a password: with a mixed sudoers
+// (one NOPASSWD rule, install and systemctl behind a password) both checks
+// succeed and every update then fails with "a password is required".
+// Tags carry over within one entry ("(root) NOPASSWD: /a, PASSWD: /b"),
+// "ALL" covers every command and negated commands ("!/b") are ignored.
+func NoPasswordCommands(listing string, want ...string) map[string]bool {
+	allowed := make(map[string]bool, len(want))
+	inCommands := false
+	for _, raw := range strings.Split(listing, "\n") {
+		line := strings.TrimSpace(raw)
+		if strings.Contains(line, "may run the following commands") {
+			inCommands = true
+			continue
+		}
+		if !inCommands || !strings.HasPrefix(line, "(") {
+			continue
+		}
+		end := strings.Index(line, ")")
+		if end < 0 {
+			continue
+		}
+		noPassword := false
+		for _, item := range strings.Split(line[end+1:], ",") {
+			item = strings.TrimSpace(item)
+			for {
+				match := sudoTag.FindStringSubmatch(item)
+				if match == nil {
+					break
+				}
+				switch match[1] {
+				case "NOPASSWD":
+					noPassword = true
+				case "PASSWD":
+					noPassword = false
+				}
+				item = strings.TrimSpace(item[len(match[0]):])
+			}
+			if !noPassword || item == "" || strings.HasPrefix(item, "!") {
+				continue
+			}
+			command := strings.Fields(item)[0]
+			for _, name := range want {
+				if command == "ALL" || filepath.Base(command) == name {
+					allowed[name] = true
+				}
+			}
+		}
+	}
+	return allowed
+}
+
+// passwordlessSudo reports whether sudo runs install and systemctl without
+// a password, from the NOPASSWD entries `sudo -n -l` lists.
+func (p Probe) passwordlessSudo(ctx context.Context) bool {
+	if p.Output == nil {
+		return false
+	}
+	listing, err := p.Output(ctx, "sudo", "-n", "-l")
+	if err != nil {
+		return false
+	}
+	allowed := NoPasswordCommands(listing, "install", "systemctl")
+	return allowed["install"] && allowed["systemctl"]
 }
 
 func runQuiet(ctx context.Context, name string, args ...string) error {
@@ -197,8 +299,7 @@ func Detect(ctx context.Context, p Probe) Report {
 		report.Reason = "the agent runs with the Linux no_new_privs flag (systemd NoNewPrivileges=true, or PrivateDevices, RestrictSUIDSGID or LockPersonality for a non-root user), so sudo cannot replace the binary, and the root-owned askio-monitor-updater is not installed. " + UpgradeHint
 	case report.HelperInstalled:
 		report.Path, report.Available = PathHelper, true
-	case p.AllowGenericSudo && p.Run != nil &&
-		p.Run(ctx, "sudo", "-n", "-l", "install") == nil && p.Run(ctx, "sudo", "-n", "-l", "systemctl") == nil:
+	case p.AllowGenericSudo && p.passwordlessSudo(ctx):
 		report.Path, report.Available = PathSudo, true
 	default:
 		report.Path, report.ReasonCode = PathNone, ReasonNoPrivilege
