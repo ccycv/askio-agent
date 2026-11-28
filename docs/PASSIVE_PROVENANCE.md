@@ -53,7 +53,8 @@ authority.
 
 ## Evidence chain and publisher policy
 
-For Ubuntu 24.04 and Debian 13 amd64, the verifier:
+For Ubuntu 24.04, 22.04 and 26.04 and Debian 13 and 12 on amd64 (one profile per release in
+`internal/vulnerability/release_profiles.go`), the verifier:
 
 1. Reads root-owned cached InRelease files. Ubuntu uses fixed `/usr/bin/gpgv`
    status output and an exact selected-certificate descriptor. Because
@@ -68,17 +69,27 @@ For Ubuntu 24.04 and Debian 13 amd64, the verifier:
    pathname is created and the mutable keyring path is not reopened.
    Only direct signatures by the pinned Ubuntu primary are qualified; a signing
    subkey remains unknown until separately qualified by a versioned policy.
-   Debian 13 uses fixed `/usr/bin/sqv`, with exactly one approved
-   primary certificate selected from the fixed regular `.pgp` archive keyring
+   Debian uses fixed `/usr/bin/sqv`, with exactly one approved
+   primary certificate selected from the release's fixed regular archive keyring
+   (`debian-archive-keyring.pgp` on 13; `debian-archive-keyring.gpg` on 12, whose
+   package ships no `.pgp` name)
    and passed through an anonymous pipe. Signature packets and the exact
    canonical message are also piped; no output file is opened. A valid signature
    by that primary or its cryptographically bound subkey is required. A bad,
    expired or revoked signature confers no authority. Debian's unrelated
    cross-signatures are not counted as authorizers; an independent valid
-   role-approved signature may authenticate the same message.
-2. Checks the signed origin, codename and release pocket. Noble release, updates
-   and security are allowed. Trixie release, updates and security are allowed;
-   Debian security keys are restricted to the security pocket. Proposed,
+   role-approved signature may authenticate the same message. Debian 12's apt
+   depends on gpgv, not sqv: install Debian's `sqv` package (1.1.0) for origins to
+   verify there; without it every origin stays unknown. sqv 1.1.0 takes the
+   detached signature as a positional argument, so Debian 12 uses that command
+   line; Debian 13's sqv 1.3 keeps `--signature-file`.
+   InRelease files may be up to 1 MiB (256 KiB before 0.4.48; jammy's base
+   InRelease is 270,087 bytes).
+2. Checks the signed origin, codename and release pocket: each release's own
+   release, updates and security pockets only (noble, jammy, resolute; trixie,
+   bookworm, whose Suite may be its codename, `stable` or `oldstable` with the
+   same suffix). Each Debian release's security key is restricted to its security
+   pocket and its archive and stable-release keys to the others. Proposed,
    backports, testing, PPAs and arbitrary host-added signing keys are excluded.
 3. Reads cached Packages data with fixed `/usr/lib/apt/apt-helper cat-file` and
    verifies the entire decompressed index's size and SHA-256 against InRelease.
@@ -103,6 +114,16 @@ Publisher fingerprint pins are versioned with the trust policy:
 | Debian 13 archive | `04B54C3CDCA79751B16BC6B5225629DF75B188BD` |
 | Debian 13 security | `5E04A1E3223A19A20706E20F9904613D4CCE68C6` |
 | Debian 13 stable release | `41587F7DB8C774BCCF131416762F67A0B2C39DE4` |
+| Debian 12 archive | `B8B80B5B623EAB6AD8775C45B7C5D7D6350947F8` |
+| Debian 12 security | `05AB90340C0C5E797F44A8C8254CF3B5AEC0A8F0` |
+| Debian 12 stable release | `4D64FEC119C2029067D6E791F8D2585B8783D481` |
+
+Ubuntu 22.04 (jammy) and 26.04 (resolute) are signed by the same 2018 archive key
+in every pocket. The Debian 12 fingerprints are the primaries of
+`ftp-master.debian.org/keys/{archive-key-12,archive-key-12-security,release-12}.asc`,
+matched to the issuer subkeys of the bookworm InRelease signatures on 2026-11-28.
+Reports name trust policy `ubuntu24.04-ubuntu22.04-ubuntu26.04-debian13-debian12-archive-v3`
+(Askio's provenance contract admits it for each of the five releases).
 
 The pins come from the [Ubuntu security documentation](https://documentation.ubuntu.com/security/software-integrity/archive-verification/),
 [Ubuntu archive key list](https://wiki.ubuntu.com/Security/FAQ), and
