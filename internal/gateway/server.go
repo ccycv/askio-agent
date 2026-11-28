@@ -15,9 +15,11 @@ import (
 	"os"
 	"runtime"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/askio-cloud/askio-monitor/internal/model"
+	"github.com/askio-cloud/askio-monitor/internal/selfupdate"
 	"github.com/askio-cloud/askio-monitor/internal/version"
 )
 
@@ -32,6 +34,10 @@ type Server struct {
 	httpClient *http.Client
 	server     *http.Server
 	updater    *selfUpdater
+
+	selfUpdateMu      sync.Mutex
+	selfUpdate        *selfupdate.Report
+	selfUpdateChecked time.Time
 
 	lastCommandID string
 }
@@ -166,6 +172,9 @@ func (s *Server) postGatewayHeartbeat(ctx context.Context) error {
 		"gateway": map[string]any{
 			"listen_addr": s.listenAddr,
 		},
+	}
+	if report := s.selfUpdateReport(ctx); report != nil {
+		payload["self_update"] = report
 	}
 	b, _ := json.Marshal(payload)
 
@@ -368,4 +377,25 @@ func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", resp.Header.Get("Content-Type"))
 	w.WriteHeader(resp.StatusCode)
 	_, _ = io.Copy(w, io.LimitReader(resp.Body, 4<<20))
+}
+
+// selfUpdateRefresh is how often the gateway re-checks its update path.
+const selfUpdateRefresh = 5 * time.Minute
+
+// selfUpdateReport is how this gateway would replace its binary, re-checked
+// every few minutes. It is the same decision the typed update_agent command
+// makes, so Askio sees "console needed" before it queues an update.
+func (s *Server) selfUpdateReport(ctx context.Context) *selfupdate.Report {
+	if s.updater == nil {
+		return nil
+	}
+	s.selfUpdateMu.Lock()
+	defer s.selfUpdateMu.Unlock()
+	if s.selfUpdate == nil || time.Since(s.selfUpdateChecked) >= selfUpdateRefresh {
+		report := s.updater.report(ctx)
+		s.selfUpdate = &report
+		s.selfUpdateChecked = time.Now()
+	}
+	report := *s.selfUpdate
+	return &report
 }

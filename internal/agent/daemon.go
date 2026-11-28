@@ -20,6 +20,7 @@ import (
 	"github.com/askio-cloud/askio-monitor/internal/model"
 	"github.com/askio-cloud/askio-monitor/internal/operations"
 	"github.com/askio-cloud/askio-monitor/internal/remediation"
+	"github.com/askio-cloud/askio-monitor/internal/selfupdate"
 	"github.com/askio-cloud/askio-monitor/internal/store"
 	"github.com/askio-cloud/askio-monitor/internal/version"
 	"github.com/askio-cloud/askio-monitor/internal/vulnerability"
@@ -42,6 +43,11 @@ type Daemon struct {
 	mu                   sync.RWMutex
 	remoteConf           model.RemoteConfig
 	detectedCapabilities map[string]bool
+	// selfUpdate is how this agent could replace its binary (guarded by mu),
+	// refreshed with the detected capabilities; nil until the first check.
+	selfUpdate *selfupdate.Report
+	// selfUpdateProbe is overridable for tests; nil means the installed paths.
+	selfUpdateProbe *selfupdate.Probe
 
 	auditMu       sync.Mutex
 	auditInFlight map[string]struct{}
@@ -332,6 +338,12 @@ func (d *Daemon) postHeartbeat(ctx context.Context) error {
 	}
 	if status := d.inventoryStatusReport(); status != nil {
 		payload["inventory_status"] = status
+	}
+	// Migration-enabled agents are updated by re-enrollment, never in place.
+	if d.migrationRunner == nil {
+		if report := d.snapshotSelfUpdate(); report != nil {
+			payload["self_update"] = report
+		}
 	}
 	if d.migrationRunner != nil {
 		attestationContext, cancel := context.WithTimeout(ctx, 8*time.Second)

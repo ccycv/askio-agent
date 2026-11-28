@@ -259,8 +259,11 @@ func TestSelfUpdate_UsesRootOwnedUpdaterUnderNoNewPrivs(t *testing.T) {
 	if result := h.lastResult(); result.Status != "success" {
 		t.Fatalf("expected success, got %+v", result)
 	}
-	if len(h.commands) != 0 {
-		t.Fatalf("the updater path needs no sudo: %v", h.commands)
+	for _, command := range h.commands {
+		// Only the read-only "systemctl is-active" check may run.
+		if command[0] != "systemctl" || command[1] != "is-active" {
+			t.Fatalf("the updater path needs no sudo or install: %v", h.commands)
+		}
 	}
 	staged, err := os.ReadFile(filepath.Join(h.updater.updaterDir, "askio-monitor.new"))
 	if err != nil || string(staged) != string(h.binary) {
@@ -355,5 +358,97 @@ func TestSelfUpdate_RejectsVersionThatOnlyContainsTheTarget(t *testing.T) {
 				t.Fatalf("mismatch must not install or leave files: %v", h.commands)
 			}
 		})
+	}
+}
+
+type exitStatus int
+
+func (e exitStatus) Error() string { return "exit status" }
+func (e exitStatus) ExitCode() int { return int(e) }
+
+// An updater whose path unit is not active would take the request and never
+// apply it, so the gateway must not hand it the binary.
+func TestSelfUpdate_InactiveUpdaterIsNotUsed(t *testing.T) {
+	h := newSelfUpdateHarness(t)
+	h.setNoNewPrivs()
+	if err := os.MkdirAll(h.updater.updaterDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(h.updater.updaterUnit, []byte("[Path]\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	base := h.updater.run
+	h.updater.run = func(ctx context.Context, name string, args ...string) (string, error) {
+		if filepath.Base(name) == "systemctl" && len(args) > 0 && args[0] == "is-active" {
+			return "inactive", exitStatus(3)
+		}
+		return base(ctx, name, args...)
+	}
+	h.poll()
+
+	result := h.lastResult()
+	if result.Status != "failed" || !strings.Contains(result.Error, "installed but not active") {
+		t.Fatalf("expected an inactive-updater error, got %+v", result)
+	}
+	if h.fetches != 0 {
+		t.Fatal("must fail before downloading")
+	}
+	if _, err := os.Stat(filepath.Join(h.updater.updaterDir, "request")); !os.IsNotExist(err) {
+		t.Fatalf("no request may be written for an inactive updater: %v", err)
+	}
+}
+
+// The gateway heartbeat reports the same path the update command would use.
+func TestGatewayHeartbeatReportsSelfUpdatePath(t *testing.T) {
+	h := newSelfUpdateHarness(t)
+	var (
+		mu   sync.Mutex
+		sent []map[string]any
+	)
+	cloud := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/monitor-agent-heartbeat" {
+			var body map[string]any
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			mu.Lock()
+			sent = append(sent, body)
+			mu.Unlock()
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(cloud.Close)
+	u, _ := url.Parse(cloud.URL)
+	h.server.cloudBase = u
+
+	if err := h.server.postGatewayHeartbeat(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	// A later change on the host shows up after the refresh interval, not on every heartbeat.
+	h.setNoNewPrivs()
+	if err := h.server.postGatewayHeartbeat(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	h.server.selfUpdateChecked = time.Now().Add(-selfUpdateRefresh)
+	if err := h.server.postGatewayHeartbeat(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(sent) != 3 {
+		t.Fatalf("expected 3 heartbeats, got %d", len(sent))
+	}
+	paths := []string{}
+	for _, body := range sent {
+		report, ok := body["self_update"].(map[string]any)
+		if !ok {
+			t.Fatalf("heartbeat without self_update: %v", body)
+		}
+		paths = append(paths, report["path"].(string))
+	}
+	if strings.Join(paths, ",") != "helper,helper,none" {
+		t.Fatalf("unexpected paths: %v", paths)
+	}
+	if last := sent[2]["self_update"].(map[string]any); last["reason_code"] != "no_new_privs" || last["available"] != false {
+		t.Fatalf("unexpected last report: %v", last)
 	}
 }
