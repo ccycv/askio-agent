@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/askio-cloud/askio-monitor/internal/model"
+	"github.com/askio-cloud/askio-monitor/internal/selfupdate"
 	"github.com/askio-cloud/askio-monitor/internal/version"
 )
 
@@ -134,34 +135,45 @@ func normalizeSHA256(value string) string {
 	return strings.ToLower(strings.NewReplacer(" ", "", ":", "").Replace(strings.TrimSpace(value)))
 }
 
-// resolveMode picks how the binary will be installed before anything is downloaded.
-func (u *selfUpdater) resolveMode() (installMode, error) {
-	if u.euid() == 0 {
-		return installRoot, nil
+// probe describes this updater to the shared self-update detection, so the
+// path the gateway reports in its heartbeat is the path it would use.
+func (u *selfUpdater) probe() selfupdate.Probe {
+	return selfupdate.Probe{
+		EUID:        u.euid,
+		ProcStatus:  u.procStatus,
+		UpdaterUnit: u.updaterUnit,
+		UpdaterDir:  u.updaterDir,
+		HelperPath:  u.helperPath,
+		Run: func(ctx context.Context, name string, args ...string) error {
+			_, err := u.run(ctx, name, args...)
+			return err
+		},
 	}
-	if fileExists(u.updaterUnit) && dirWritable(u.updaterDir) {
-		return installUpdater, nil
-	}
-	if u.noNewPrivs() {
-		return "", fmt.Errorf("the gateway process has the Linux no_new_privs flag set (systemd NoNewPrivileges=true, or a unit hardening option that implies it), so sudo cannot replace the binary, and the root-owned askio-monitor-updater is not installed. %s", reinstallHint)
-	}
-	if info, err := os.Stat(u.helperPath); err == nil && info.Mode().IsRegular() && info.Mode()&0o111 != 0 {
-		return installHelper, nil
-	}
-	return "", fmt.Errorf("the restricted helper %s is missing, so the gateway cannot replace its binary. %s", u.helperPath, reinstallHint)
 }
 
-func (u *selfUpdater) noNewPrivs() bool {
-	data, err := os.ReadFile(u.procStatus)
-	if err != nil {
-		return false
+// report is the heartbeat self_update object for this gateway.
+func (u *selfUpdater) report(ctx context.Context) selfupdate.Report {
+	return selfupdate.Detect(ctx, u.probe())
+}
+
+// resolveMode picks how the binary will be installed before anything is downloaded.
+func (u *selfUpdater) resolveMode(ctx context.Context) (installMode, error) {
+	report := u.report(ctx)
+	switch report.Path {
+	case selfupdate.PathRoot:
+		return installRoot, nil
+	case selfupdate.PathUpdater:
+		return installUpdater, nil
+	case selfupdate.PathHelper:
+		return installHelper, nil
 	}
-	for _, line := range strings.Split(string(data), "\n") {
-		if strings.HasPrefix(line, "NoNewPrivs:") {
-			return strings.TrimSpace(strings.TrimPrefix(line, "NoNewPrivs:")) == "1"
-		}
+	switch report.ReasonCode {
+	case selfupdate.ReasonNoNewPrivs:
+		return "", fmt.Errorf("the gateway process has the Linux no_new_privs flag set (systemd NoNewPrivileges=true, or a unit hardening option that implies it), so sudo cannot replace the binary, and the root-owned askio-monitor-updater is not usable. %s", reinstallHint)
+	case selfupdate.ReasonUpdaterInactive:
+		return "", fmt.Errorf("askio-monitor-updater.path is installed but not active, and the gateway process has the Linux no_new_privs flag set, so sudo cannot replace the binary either. Run 'systemctl enable --now askio-monitor-updater.path' as root on the gateway")
 	}
-	return false
+	return "", fmt.Errorf("the restricted helper %s is missing, so the gateway cannot replace its binary. %s", u.helperPath, reinstallHint)
 }
 
 // stageDir returns the first writable directory that allows execution. /tmp
@@ -204,7 +216,7 @@ func (u *selfUpdater) prepare(ctx context.Context, cmd *model.PendingCommand) (s
 	if err := u.validate(cmd); err != nil {
 		return "", "", "", err
 	}
-	mode, err = u.resolveMode()
+	mode, err = u.resolveMode(ctx)
 	if err != nil {
 		return "", "", "", err
 	}
